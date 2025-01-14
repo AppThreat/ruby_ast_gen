@@ -71,7 +71,7 @@ module NodeHandling
     range = location.expression || location
     return nil unless range.is_a?(Parser::Source::Range)
     snippet = source_code[range.begin_pos...range.end_pos]
-    self.truncate_string(snippet.strip, 90)
+    self.truncate_string(snippet.strip, 200)
   end
 
   def self.add_node_properties(node_type, base_map, file_path)
