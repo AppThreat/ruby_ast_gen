@@ -5,14 +5,14 @@ require_relative "lib/ruby_ast_gen/version"
 Gem::Specification.new do |spec|
   spec.name = "ruby_ast_gen"
   spec.version = RubyAstGen::VERSION
-  spec.authors = ["David Baker Effendi", "Andrei Dreyer"]
-  spec.email = ["dave@whirlylabs.com", "andrei@whirlylabs.com"]
+  spec.authors = ["David Baker Effendi", "Andrei Dreyer", "Team AppThreat"]
+  spec.email = ["dave@whirlylabs.com", "andrei@whirlylabs.com", "hello@appthreat.com"]
 
   spec.summary = "A Ruby parser than dumps the AST as JSON output"
-  spec.description = "A Ruby parser than dumps the AST as JSON output for Joern's `rubysrc2cpg` frontend"
-  spec.homepage = "https://github.com/whirlylabs/ruby_ast_gen"
+  spec.description = "A Ruby parser than dumps the AST as JSON output for atom `rubysrc2cpg` frontend"
+  spec.homepage = "https://github.com/appthreat/ruby_ast_gen"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.0.7"
+  spec.required_ruby_version = ">= 3.4.1"
 
   spec.metadata["homepage_uri"] = spec.homepage
 
