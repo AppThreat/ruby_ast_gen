@@ -12,7 +12,7 @@ Gem::Specification.new do |spec|
   spec.description = "A Ruby parser than dumps the AST as JSON output for atom `rubysrc2cpg` frontend"
   spec.homepage = "https://github.com/appthreat/ruby_ast_gen"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.1.6"
+  spec.required_ruby_version = ">= 3.1.4"
 
   spec.metadata["homepage_uri"] = spec.homepage
 
