@@ -76,7 +76,7 @@ module RubyAstGen
 
       output_path = File.join(output_dir, "#{relative_path}.json")
 
-      File.write(output_path, JSON.pretty_generate(ast))
+      File.write(output_path, JSON.generate(ast))
     rescue StandardError => e
       RubyAstGen::Logger::info "'#{relative_input_path}' - #{e.message}"
     end
