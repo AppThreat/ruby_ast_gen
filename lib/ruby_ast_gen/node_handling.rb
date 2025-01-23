@@ -58,12 +58,8 @@ module NodeHandling
     return base_hash
   end
 
-  def self.truncate_string(string, max_length, truncation_suffix = "...")
-    if string.length > max_length
-      string[0, max_length] + truncation_suffix
-    else
-      string
-    end
+  def self.trim_string(string)
+    string.gsub(/\n/, " ").gsub(/(\s)+/, " ")
   end
 
   def self.extract_code_snippet(location, source_code)
@@ -71,7 +67,7 @@ module NodeHandling
     range = location.expression || location
     return nil unless range.is_a?(Parser::Source::Range)
     snippet = source_code[range.begin_pos...range.end_pos]
-    self.truncate_string(snippet.strip, 200)
+    self.trim_string(snippet.strip)
   end
 
   def self.add_node_properties(node_type, base_map, file_path)

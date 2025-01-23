@@ -1,4 +1,6 @@
+$VERBOSE = nil
 require 'parser/current'
+$VERBOSE = true
 require 'fileutils'
 require 'json'
 require 'thread'
@@ -48,7 +50,7 @@ module RubyAstGen
     elsif File.directory?(input_path)
       process_directory(input_path, output_dir, exclude_regex)
     else
-      RubyAstGen::Logger::error "#{input_path} is neither a file nor a directory."
+      RubyAstGen::Logger::info "#{input_path} is neither a file nor a directory."
       exit 1
     end
   end
@@ -62,7 +64,7 @@ module RubyAstGen
     relative_input_path = file_path.sub("#{base_dir}/", '')
     # Skip if the file matches the exclusion regex
     if exclude_regex && exclude_regex.match?(relative_input_path)
-      RubyAstGen::Logger::info "Excluding: #{relative_input_path}"
+      RubyAstGen::Logger::debug "Excluding: #{relative_input_path}"
       return
     end
 
@@ -75,9 +77,8 @@ module RubyAstGen
       output_path = File.join(output_dir, "#{relative_path}.json")
 
       File.write(output_path, JSON.pretty_generate(ast))
-      RubyAstGen::Logger::info "Processed: #{relative_input_path} -> #{output_path}"
     rescue StandardError => e
-      RubyAstGen::Logger::error "'#{relative_input_path}' - #{e.message}"
+      RubyAstGen::Logger::info "'#{relative_input_path}' - #{e.message}"
     end
   end
 
@@ -106,7 +107,7 @@ module RubyAstGen
 
             process_file(path, output_subdir, exclude_regex, dir_path)
           rescue => e
-            RubyAstGen::Logger::error "Error processing #{path}: #{e.message}"
+            RubyAstGen::Logger::info "Error processing #{path}: #{e.message}"
           end
         end
       end
@@ -127,13 +128,13 @@ module RubyAstGen
     json_ast[:rel_file_path] = relative_input_path
     json_ast
   rescue Parser::SyntaxError => e
-    RubyAstGen::Logger::error "Failed to parse #{file_path}: #{e.message}"
+    RubyAstGen::Logger::info "Failed to parse #{file_path}: #{e.message}"
     nil
   end
 
   def self.ruby_file?(file_path)
     ext = File.extname(file_path)
-    ['.rb', '.gemspec', 'Rakefile'].include?(ext) || file_path.end_with?('.rb')
+    %w[.rb .gemspec Rakefile .rake .ru].include?(ext) || file_path.end_with?('.rb')
   end
 
 end

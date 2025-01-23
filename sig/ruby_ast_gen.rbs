@@ -1,3 +1,0 @@
-module RubyAstGen
-  VERSION: String
-end
