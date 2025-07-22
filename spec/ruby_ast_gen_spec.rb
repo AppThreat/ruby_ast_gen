@@ -171,4 +171,89 @@ RSpec.describe RubyAstGen do
     ast = RubyAstGen.parse_file(temp_file.path, temp_name)
     expect(ast).not_to be_nil
   end
+  
+  context "Ruby 3.4 syntax", if: (Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.4")) do
+    it "parses default block parameter in do/end blocks" do
+      code(<<~RUBY)
+        [10, 20, 30].select do
+          it > 15
+        end
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+    
+    it "parses nested `it` blocks correctly" do
+      code(<<~RUBY)
+        [1, 2, 3].map { it * 2 }.each { puts it }
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+    
+    it "parses simple method call with **nil keyword splat" do
+      code(<<~RUBY)
+        send_email(to: "hello@appthreat.com", **nil)
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+    
+    it "parses a method definition using **nil as default keyword args" do
+      code(<<~RUBY)
+        def configure(**nil)
+          opts
+        end
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+    
+    it "parses a chain mixing `it` and **nil" do
+      code(<<~RUBY)
+        [4,5,6].reject { it.even? }.map { process(it, **nil) }
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+    
+    it "parses the new default block parameter `it`" do
+      code(<<~RUBY)
+        result = [1, 2, 3].map { it * 2 }
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+
+    it "parses keyword splatting of `nil` (`**nil` → `{}`)" do
+      code(<<~RUBY)
+        def handle_options(**opts); opts; end
+        handle_options(**nil)
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+
+    it "raises on block‐arg in index assignment (syntax removed in 3.4)" do
+      code(<<~RUBY)
+        numbers = []
+        even_block = ->(x) { x.even? }
+        numbers[&even_block] = 10
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).to be_nil
+    end
+
+    it "raises on keyword‐arg in index assignment (syntax removed in 3.4)" do
+      code(<<~RUBY)
+        class Matrix
+          def []=(*args, **kwargs); end
+        end
+        matrix = Matrix.new
+        matrix[5, axis: :y] = 8
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).to be_nil
+    end
+  end
 end

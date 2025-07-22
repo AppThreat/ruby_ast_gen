@@ -211,7 +211,9 @@ module NodeHandling
     when *RANGE_OP
       base_map[:start] = children[0]
       base_map[:end] = children[1]
-
+    when :itblock
+      base_map[:call] = children[0]
+      base_map[:body] = children[1]
     when :numblock
       base_map[:call] = children[0]
       base_map[:param_idx] = children[1]
@@ -223,6 +225,15 @@ module NodeHandling
 
     when :preexe, :postexe
       base_map[:body] = children[0]
+
+    when :kwnilarg
+      base_map[:call] = node_type.to_s
+      base_map[:body] = false
+    when :kwrestarg
+      base_map[:name] = children[0]
+      if children[1]
+        base_map[:value] = children[1]
+      end
 
     when *COLLECTIONS, *DYNAMIC_LITERALS, *REFS
       # put :children back
