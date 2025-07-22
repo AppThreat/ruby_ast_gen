@@ -171,7 +171,47 @@ RSpec.describe RubyAstGen do
     ast = RubyAstGen.parse_file(temp_file.path, temp_name)
     expect(ast).not_to be_nil
   end
-  
+  context "boolean literals" do
+    it "parses bare true and false" do
+        code(<<~RUBY)
+        a = true
+        b = false
+        RUBY
+        ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+        expect(ast).not_to be_nil
+    end
+    
+    it "parses boolean literals in an array" do
+        code("[true, false, nil]")
+        ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+        expect(ast).not_to be_nil
+    end
+  end
+  context "pin nodes" do
+    it "parses pinned array patterns" do
+        code(<<~RUBY)
+            x = 10
+            case [x, 2, 3]
+            in [^x, y, z]
+            :matched
+            end
+        RUBY
+        ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+        expect(ast).not_to be_nil
+    end
+        
+    it "parses pinned hash patterns" do
+        code(<<~RUBY)
+            x = :foo
+            case {a: x, b: 2}
+            in {a: ^x, b: y}
+            :ok
+            end
+        RUBY
+        ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+        expect(ast).not_to be_nil
+    end
+  end
   context "Ruby 3.4 syntax", if: (Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.4")) do
     it "parses default block parameter in do/end blocks" do
       code(<<~RUBY)

@@ -3,7 +3,7 @@
 module NodeHandling
   MAX_NESTING_DEPTH = 100
 
-  SINGLETONS = [:nil, true, false].freeze # :__FILE__, :__LINE__, :__ENCODING__
+  SINGLETONS = %i[nil true false].freeze
   LITERALS = %i[int float rational complex str sym].freeze
   CALLS = %i[send csend].freeze
   DYNAMIC_LITERALS = %i[dsym dstr].freeze
@@ -234,6 +234,9 @@ module NodeHandling
       if children[1]
         base_map[:value] = children[1]
       end
+
+    when :pin
+      base_map[:value] = children[0]
 
     when *COLLECTIONS, *DYNAMIC_LITERALS, *REFS
       # put :children back
