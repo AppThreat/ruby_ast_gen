@@ -1,6 +1,3 @@
-$VERBOSE = nil
-require 'parser/current'
-$VERBOSE = true
 require 'fileutils'
 require 'json'
 require 'thread'
@@ -32,7 +29,7 @@ module RubyAstGen
   # Main method to parse the input and generate the AST output
   def self.parse(opts)
     if opts[:debug]
-      RubyAstGen::Logger::debug "CLI Arguments received: #{opts}" 
+      RubyAstGen::Logger::debug "CLI Arguments received: #{opts}"
     end
 
     input_path = opts[:input]
@@ -116,19 +113,36 @@ module RubyAstGen
     threads.each(&:join)
   end
 
+  def self.parser_for_current_ruby
+    code_version = RUBY_VERSION.to_f
+    require 'parser/source/buffer'
+    if code_version <= 3.3
+      require 'parser/current'
+      parser = ::Parser::CurrentRuby
+    else
+      require 'prism'
+      parser = case code_version
+               when 3.4 then ::Prism::Translation::Parser34
+               else
+                 warn "Unknown Ruby version #{code_version}, using 3.4 as a fallback"
+                 ::Prism::Translation::Parser34
+               end
+    end
+    RubyAstGen::Logger.debug "Using parser: #{parser}"
+    parser
+  end
+
   def self.parse_file(file_path, relative_input_path)
+    parser = parser_for_current_ruby
     code = File.read(file_path)
-    buffer = Parser::Source::Buffer.new(file_path)
-    buffer.source = code
-    parser = Parser::CurrentRuby.new
-    ast = parser.parse(buffer)
+    ast = parser.parse(code)
     return unless ast
     json_ast = NodeHandling::ast_to_json(ast, code, file_path: relative_input_path)
     json_ast[:file_path] = file_path
     json_ast[:rel_file_path] = relative_input_path
     json_ast
-  rescue Parser::SyntaxError => e
-    RubyAstGen::Logger::info "Failed to parse #{file_path}: #{e.message}"
+  rescue ::Parser::SyntaxError => e
+    RubyAstGen::Logger.info "Failed to parse #{file_path}: #{e.message}"
     nil
   end
 

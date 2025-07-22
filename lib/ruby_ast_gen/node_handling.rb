@@ -1,28 +1,31 @@
 # frozen_string_literal: true
 
 module NodeHandling
-
   MAX_NESTING_DEPTH = 100
 
-  SINGLETONS = [:nil, :true, :false] #:__FILE__, :__LINE__, :__ENCODING__
-  LITERALS = [:int, :float, :rational, :complex, :str, :sym]
-  CALLS = [:send, :csend]
-  DYNAMIC_LITERALS = [:dsym, :dstr]
-  CONTROL_KW = [:break, :next]
-  ARGUMENTS = [:arg, :restarg, :blockarg, :kwrestarg, :shadowarg]
-  KW_ARGUMENTS = [:kwarg, :kwnilarg, :kwoptarg]
-  REFS = [:nth_ref, :back_ref]
-  FORWARD_ARGUMENTS = [:forward_args, :forwarded_args, :forward_arg]
-  ASSIGNMENTS = [:or_asgn, :and_asgn, :lvasgn, :ivasgn, :gvasgn, :cvasgn, :match_with_lvasgn]
-  BIN_OP = [:and, :or, :match_pattern, :match_pattern_p]
-  ACCESS = [:self, :ident, :lvar, :cvar, :gvar, :ivar, :splat, :kwsplat, :block_pass, :match_var]
-  QUAL_ACCESS = [:casgn]
-  COLLECTIONS = [:args, :array, :hash, :mlhs, :hash_pattern, :array_pattern, :array_pattern_with_tail, :find_pattern, :undef, :procarg0]
-  SPECIAL_CMD = [:yield, :super, :defined?, :xstr]
-  RANGE_OP = [:erange, :irange, :eflipflop, :iflipflop]
+  SINGLETONS = [:nil, true, false].freeze # :__FILE__, :__LINE__, :__ENCODING__
+  LITERALS = %i[int float rational complex str sym].freeze
+  CALLS = %i[send csend].freeze
+  DYNAMIC_LITERALS = %i[dsym dstr].freeze
+  CONTROL_KW = %i[break next].freeze
+  ARGUMENTS = %i[arg restarg blockarg kwrestarg shadowarg].freeze
+  KW_ARGUMENTS = %i[kwarg kwnilarg kwoptarg].freeze
+  REFS = %i[nth_ref back_ref].freeze
+  FORWARD_ARGUMENTS = %i[forward_args forwarded_args forward_arg].freeze
+  ASSIGNMENTS = %i[or_asgn and_asgn lvasgn ivasgn gvasgn cvasgn match_with_lvasgn].freeze
+  BIN_OP = %i[and or match_pattern match_pattern_p].freeze
+  ACCESS = %i[self ident lvar cvar gvar ivar splat kwsplat block_pass
+    match_var].freeze
+  QUAL_ACCESS = [:casgn].freeze
+  COLLECTIONS = %i[args array hash mlhs hash_pattern array_pattern
+    array_pattern_with_tail find_pattern undef procarg0].freeze
+  SPECIAL_CMD = %i[yield super defined? xstr].freeze
+  RANGE_OP = %i[erange irange eflipflop iflipflop].freeze
 
   def self.fetch_member(loc, method)
-    loc.public_send(method) rescue -1
+    loc.public_send(method)
+  rescue
+    -1
   end
 
   def self.ast_to_json(node, code, current_depth: 0, file_path: nil)
@@ -36,11 +39,11 @@ module NodeHandling
       end_column: fetch_member(loc, :last_column),
       offset_start: loc&.expression&.begin_pos,
       offset_end: loc&.expression&.end_pos,
-      code: self.extract_code_snippet(loc, code)
+      code: extract_code_snippet(loc, code)
     }
     if current_depth >= MAX_NESTING_DEPTH
-      RubyAstGen::Logger::warn "Reached max JSON depth on a #{node.type.to_s} node"
-      return { type: node.type.to_s, meta_data: meta_data, nested: true }
+      RubyAstGen::Logger.warn "Reached max JSON depth on a #{node.type} node"
+      return {type: node.type.to_s, meta_data: meta_data, nested: true}
     end
 
     base_hash = {
@@ -55,19 +58,21 @@ module NodeHandling
       end
     }
     add_node_properties(node.type, base_hash, file_path)
-    return base_hash
+    base_hash
   end
 
   def self.trim_string(string)
-    string.gsub(/\n/, " ").gsub(/(\s)+/, " ")
+    string.tr("\n", " ").gsub(/(\s)+/, " ")
   end
 
   def self.extract_code_snippet(location, source_code)
     return nil unless location
+
     range = location.expression || location
     return nil unless range.is_a?(Parser::Source::Range)
+
     snippet = source_code[range.begin_pos...range.end_pos]
-    self.trim_string(snippet.strip)
+    trim_string(snippet.strip)
   end
 
   def self.add_node_properties(node_type, base_map, file_path)
@@ -114,7 +119,7 @@ module NodeHandling
     when :begin
       base_map[:body] = children
     when :kwbegin
-      base_map[:body] = children[0..-1]
+      base_map[:body] = children
     when :case
       base_map[:case_expression] = children[0]
       base_map[:when_clauses] = children[1..-2]
@@ -154,7 +159,7 @@ module NodeHandling
     when :regopt, *REFS, :redo
       base_map[:value] = children[0] if children[0]
     when :return
-      base_map[:values] = children[0..-1] if children[0]
+      base_map[:values] = children if children[0]
     when *CONTROL_KW
       base_map[:arguments] = children[0] if children[0]
     when *FORWARD_ARGUMENTS, :retry, :zsuper, :match_nil_pattern
@@ -187,7 +192,7 @@ module NodeHandling
     when *CALLS
       base_map[:receiver] = children[0]
       base_map[:name] = children[1]
-      base_map[:arguments] = children[2..-1] # Variable arguments
+      base_map[:arguments] = children[2..] # Variable arguments
     when *SPECIAL_CMD
       base_map[:arguments] = children
 
@@ -211,7 +216,7 @@ module NodeHandling
       base_map[:call] = children[0]
       base_map[:param_idx] = children[1]
       base_map[:body] = children[2]
-    
+
     when :masgn
       base_map[:lhs] = children[0]
       base_map[:rhs] = children[1]
@@ -224,9 +229,8 @@ module NodeHandling
       base_map[:children] = children
 
     else
-      RubyAstGen::Logger::warn "Unhandled AST node type: #{node_type} - #{file_path}"
+      RubyAstGen::Logger.warn "Unhandled AST node type: #{node_type} - #{file_path}"
       base_map[:children] = children
     end
   end
-
 end

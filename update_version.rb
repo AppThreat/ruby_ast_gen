@@ -1,10 +1,10 @@
 #!/usr/bin/env ruby
+# frozen_string_literal: true
 
 # Script to update the version in `lib/ruby_ast_gen/version.rb`
-require 'fileutils'
+require "fileutils"
 
-VERSION_FILE_PATH = 'lib/ruby_ast_gen/version.rb'
-
+VERSION_FILE_PATH = "lib/ruby_ast_gen/version.rb"
 
 if ARGV.empty?
   puts "Usage: update_version.rb <new_version>"
@@ -16,7 +16,7 @@ unless new_version.match?(/^v\d+\.\d+\.\d+$/)
   puts "Invalid version format. Please provide a version in the format 'vX.X.X' (e.g., v1.0.0)."
   exit 1
 end
-stripped_version = new_version.gsub(/^v/, '')
+stripped_version = new_version.gsub(/^v/, "")
 
 begin
   contents = File.read(VERSION_FILE_PATH)
@@ -25,7 +25,8 @@ rescue Errno::ENOENT
   exit 1
 end
 
-new_contents = contents.gsub(/VERSION\s*=\s*["']\d+\.\d+\.\d+["']/, "VERSION = \"#{stripped_version}\"")
+new_contents = contents.gsub(/VERSION\s*=\s*["']\d+\.\d+\.\d+["']/,
+  "VERSION = \"#{stripped_version}\"")
 
 begin
   File.write(VERSION_FILE_PATH, new_contents)
