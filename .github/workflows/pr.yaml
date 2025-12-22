@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         ruby: ["3.1.7", "3.2.9", "3.3.10", "3.4.5", "3.4.6", "3.4.7", "3.4.8", "jruby-9.4", "jruby-10.0", "jruby-head", "truffleruby-24.0", "truffleruby-25.0"]
-        os: ['ubuntu-22.04', 'ubuntu-24.04', 'windows-latest', 'ubuntu-22.04-arm', 'ubuntu-24.04-arm', 'macos-13', 'macos-15', 'macos-26']
+        os: ['ubuntu-22.04', 'ubuntu-24.04', 'windows-latest', 'ubuntu-22.04-arm', 'ubuntu-24.04-arm', 'macos-15', 'macos-26']
         exclude:
           - os: macos-26
             ruby: truffleruby-24.0
