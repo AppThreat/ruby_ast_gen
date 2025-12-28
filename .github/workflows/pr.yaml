@@ -27,6 +27,8 @@ jobs:
             ruby: truffleruby-24.0
           - os: windows-latest
             ruby: truffleruby-25.0
+          - os: windows-latest
+            ruby: 4.0.0
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
