@@ -171,7 +171,8 @@ RSpec.describe RubyAstGen do
     ast = RubyAstGen.parse_file(temp_file.path, temp_name)
     expect(ast).not_to be_nil
   end
-  context "boolean literals" do
+
+  context "Literals" do
     it "parses bare true and false" do
         code(<<~RUBY)
         a = true
@@ -186,8 +187,54 @@ RSpec.describe RubyAstGen do
         ast = RubyAstGen.parse_file(temp_file.path, temp_name)
         expect(ast).not_to be_nil
     end
+
+    it "parses complex and rational literals" do
+      code(<<~RUBY)
+        c = 42i
+        r = 3.14r
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
   end
-  context "pin nodes" do
+
+  context "Pattern Matching Extensions" do
+    it "parses constant patterns (const_pattern)" do
+      code(<<~RUBY)
+        val = 1
+        case val
+        in Integer
+          :int
+        in String
+          :str
+        end
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+
+    it "parses variable capture in array patterns (match_write)" do
+      code(<<~RUBY)
+        case [1, 2]
+        in [a, b]
+          a + b
+        end
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+
+    it "parses find patterns" do
+      code(<<~RUBY)
+        case [1, 2, 3]
+        in [*, 2, *]
+          :found
+        end
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+
     it "parses pinned array patterns" do
         code(<<~RUBY)
             x = 10
@@ -212,6 +259,7 @@ RSpec.describe RubyAstGen do
         expect(ast).not_to be_nil
     end
   end
+
   context "Ruby 3.4 syntax", if: (Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.4")) do
     it "parses default block parameter in do/end blocks" do
       code(<<~RUBY)
