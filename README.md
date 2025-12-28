@@ -2,7 +2,7 @@
 
 A Ruby parser than dumps the AST as JSON output. Uses both the
 [`parser` gem](https://github.com/whitequark/parser/tree/90e0a4e2be86b02c423c77337adcfccdf6dd611b) and prism gem, thus supports
-parsing Ruby version 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 3.0, 3.1, 3.2, 3.3, and 3.4 syntax with
+parsing Ruby version 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 3.0, 3.1, 3.2, 3.3, 3.4, and 4.0 syntax with
 backwards-compatible AST formats.
 
 ## Usage

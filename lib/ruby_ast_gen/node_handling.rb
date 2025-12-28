@@ -12,7 +12,7 @@ module NodeHandling
   KW_ARGUMENTS = %i[kwarg kwnilarg kwoptarg].freeze
   REFS = %i[nth_ref back_ref].freeze
   FORWARD_ARGUMENTS = %i[forward_args forwarded_args forward_arg].freeze
-  ASSIGNMENTS = %i[or_asgn and_asgn lvasgn ivasgn gvasgn cvasgn match_with_lvasgn].freeze
+  ASSIGNMENTS = %i[or_asgn and_asgn lvasgn ivasgn gvasgn cvasgn match_with_lvasgn match_write].freeze
   BIN_OP = %i[and or match_pattern match_pattern_p].freeze
   ACCESS = %i[self ident lvar cvar gvar ivar splat kwsplat block_pass
     match_var].freeze
@@ -144,6 +144,9 @@ module NodeHandling
       base_map[:pattern] = children[0]
       base_map[:guard] = children[1]
       base_map[:body] = children[2]
+    when :const_pattern
+      base_map[:const] = children[0]
+      base_map[:pattern] = children[1]
     when :if_guard, :unless_guard
       base_map[:condition] = children[0]
     when :match_alt

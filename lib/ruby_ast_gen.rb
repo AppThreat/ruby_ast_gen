@@ -114,20 +114,35 @@ module RubyAstGen
   end
 
   def self.parser_for_current_ruby
-    code_version = RUBY_VERSION.to_f
+    current_version = Gem::Version.new(RUBY_VERSION)
+    prism_cutoff = Gem::Version.new("3.4.0")
+
     require 'parser/source/buffer'
-    if code_version <= 3.3
+
+    if current_version < prism_cutoff
       require 'parser/current'
       parser = ::Parser::CurrentRuby
     else
       require 'prism'
-      parser = case code_version
-               when 3.4 then ::Prism::Translation::Parser34
-               else
-                 warn "Unknown Ruby version #{code_version}, using 3.4 as a fallback"
-                 ::Prism::Translation::Parser34
-               end
+      begin
+        require 'prism/translation'
+      rescue LoadError
+      end
+
+      major = current_version.segments[0]
+      minor = current_version.segments[1]
+      parser_class_name = "Parser#{major}#{minor}"
+
+      if defined?(::Prism::Translation) && ::Prism::Translation.const_defined?(parser_class_name)
+        parser = ::Prism::Translation.const_get(parser_class_name)
+      else
+        parser = ::Prism::Translation::Parser34
+        if major >= 4
+          parser = ::Prism::Translation::Parser40
+        end
+      end
     end
+
     RubyAstGen::Logger.debug "Using parser: #{parser}"
     parser
   end
