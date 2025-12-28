@@ -181,7 +181,7 @@ RSpec.describe RubyAstGen do
         ast = RubyAstGen.parse_file(temp_file.path, temp_name)
         expect(ast).not_to be_nil
     end
-    
+
     it "parses boolean literals in an array" do
         code("[true, false, nil]")
         ast = RubyAstGen.parse_file(temp_file.path, temp_name)
@@ -246,7 +246,7 @@ RSpec.describe RubyAstGen do
         ast = RubyAstGen.parse_file(temp_file.path, temp_name)
         expect(ast).not_to be_nil
     end
-        
+
     it "parses pinned hash patterns" do
         code(<<~RUBY)
             x = :foo
@@ -270,7 +270,7 @@ RSpec.describe RubyAstGen do
       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
       expect(ast).not_to be_nil
     end
-    
+
     it "parses nested `it` blocks correctly" do
       code(<<~RUBY)
         [1, 2, 3].map { it * 2 }.each { puts it }
@@ -278,7 +278,7 @@ RSpec.describe RubyAstGen do
       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
       expect(ast).not_to be_nil
     end
-    
+
     it "parses simple method call with **nil keyword splat" do
       code(<<~RUBY)
         send_email(to: "hello@appthreat.com", **nil)
@@ -286,7 +286,7 @@ RSpec.describe RubyAstGen do
       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
       expect(ast).not_to be_nil
     end
-    
+
     it "parses a method definition using **nil as default keyword args" do
       code(<<~RUBY)
         def configure(**nil)
@@ -296,7 +296,7 @@ RSpec.describe RubyAstGen do
       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
       expect(ast).not_to be_nil
     end
-    
+
     it "parses a chain mixing `it` and **nil" do
       code(<<~RUBY)
         [4,5,6].reject { it.even? }.map { process(it, **nil) }
@@ -304,7 +304,7 @@ RSpec.describe RubyAstGen do
       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
       expect(ast).not_to be_nil
     end
-    
+
     it "parses the new default block parameter `it`" do
       code(<<~RUBY)
         result = [1, 2, 3].map { it * 2 }
@@ -323,25 +323,118 @@ RSpec.describe RubyAstGen do
     end
 
     it "raises on block‐arg in index assignment (syntax removed in 3.4)" do
+       code(<<~RUBY)
+         numbers = []
+         even_block = ->(x) { x.even? }
+         numbers[&even_block] = 10
+       RUBY
+       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+       expect(ast).to be_nil
+     end
+
+     it "raises on keyword‐arg in index assignment (syntax removed in 3.4)" do
+       code(<<~RUBY)
+         class Matrix
+           def []=(*args, **kwargs); end
+         end
+         matrix = Matrix.new
+         matrix[5, axis: :y] = 8
+       RUBY
+       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+       expect(ast).to be_nil
+     end
+  end
+
+  context "Ruby 4.0 syntax", if: (Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("4.0.0")) do
+    it "parses leading && operator (multiline chain)" do
       code(<<~RUBY)
-        numbers = []
-        even_block = ->(x) { x.even? }
-        numbers[&even_block] = 10
+        def valid?
+          condition1
+          && condition2
+        end
       RUBY
       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
-      expect(ast).to be_nil
+      expect(ast).not_to be_nil
     end
 
-    it "raises on keyword‐arg in index assignment (syntax removed in 3.4)" do
+    it "parses leading || operator (multiline chain)" do
       code(<<~RUBY)
-        class Matrix
-          def []=(*args, **kwargs); end
-        end
-        matrix = Matrix.new
-        matrix[5, axis: :y] = 8
+        result = part1
+          || part2
       RUBY
       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
-      expect(ast).to be_nil
+      expect(ast).not_to be_nil
+    end
+
+    it "parses leading `and` operator" do
+      code(<<~RUBY)
+        x = true
+        y = false
+        res = x
+          and y
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+
+    it "parses *nil splat syntax" do
+      code(<<~RUBY)
+        def foo(*args)
+          args
+        end
+        foo(*nil)
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+  end
+  
+  context "Specific Prism Bug Reports" do
+    it "parses character literals with control escape sequences correctly" do
+      code("x = ?\\C-\\]") 
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+      
+      expect(ast[:type]).to eq("lvasgn")
+      
+      rhs = ast[:rhs]
+      expect(rhs[:type]).to eq("str")
+      expect(rhs[:value]).to eq("\u001D")
+    end
+
+    it "parses heredocs inside procs correctly" do
+      code(<<~RUBY)
+        f = proc { <<END }
+          heredoc_content
+        END
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+      
+      block_node = ast[:rhs]
+      expect(block_node[:type]).to eq("block")
+      
+      body_node = block_node[:body]
+      expect(body_node[:type]).to eq("str")
+      expect(body_node[:value]).to include("heredoc_content")
+    end
+
+    it "parses top-level constant operator assignment (::Foo ||= ...)" do
+      code("::Foo ||= p(1)")
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+      
+      expect(ast[:type]).to eq("or_asgn")
+      
+      lhs = ast[:lhs]
+      expect(lhs[:type]).to eq("casgn")
+      
+      expect(lhs[:base][:type]).to eq("cbase")
+      expect(lhs[:lhs]).to eq(:Foo)
+      
+      rhs = ast[:rhs]
+      expect(rhs[:type]).to eq("send")
+      expect(rhs[:name]).to eq(:p)
     end
   end
 end

@@ -118,15 +118,31 @@ module RubyAstGen
     prism_cutoff = Gem::Version.new("3.4.0")
 
     require 'parser/source/buffer'
-    
+
     if current_version < prism_cutoff
       require 'parser/current'
       parser = ::Parser::CurrentRuby
     else
       require 'prism'
-      parser = ::Prism::Translation::Parser34
+      begin
+        require 'prism/translation'
+      rescue LoadError
+      end
+
+      major = current_version.segments[0]
+      minor = current_version.segments[1]
+      parser_class_name = "Parser#{major}#{minor}"
+
+      if defined?(::Prism::Translation) && ::Prism::Translation.const_defined?(parser_class_name)
+        parser = ::Prism::Translation.const_get(parser_class_name)
+      else
+        parser = ::Prism::Translation::Parser34
+        if major >= 4
+          parser = ::Prism::Translation::Parser40
+        end
+      end
     end
-    
+
     RubyAstGen::Logger.debug "Using parser: #{parser}"
     parser
   end

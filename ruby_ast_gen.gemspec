@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ["dave@whirlylabs.com", "andrei@whirlylabs.com", "hello@appthreat.com"]
 
   spec.summary = "A Ruby parser than dumps the AST as JSON output"
-  spec.description = "A Ruby parser than dumps the AST as JSON output for atom `rubysrc2cpg` frontend"
+  spec.description = "A Ruby parser than dumps the AST as JSON output for atom `ruby2atom` frontend"
   spec.homepage = "https://github.com/appthreat/ruby_ast_gen"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.1.4"
