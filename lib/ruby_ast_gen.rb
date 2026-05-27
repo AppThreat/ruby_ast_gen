@@ -113,7 +113,7 @@ module RubyAstGen
     threads.each(&:join)
   end
 
-  def self.parser_for_current_ruby
+  def self.parser_for_current_ruby(log: true)
     current_version = Gem::Version.new(RUBY_VERSION)
     prism_cutoff = Gem::Version.new("3.4.0")
 
@@ -123,28 +123,77 @@ module RubyAstGen
       require 'parser/current'
       parser = ::Parser::CurrentRuby
     else
-      require 'prism'
       begin
+        require 'prism'
         require 'prism/translation'
       rescue LoadError
-      end
-
-      major = current_version.segments[0]
-      minor = current_version.segments[1]
-      parser_class_name = "Parser#{major}#{minor}"
-
-      if defined?(::Prism::Translation) && ::Prism::Translation.const_defined?(parser_class_name)
-        parser = ::Prism::Translation.const_get(parser_class_name)
+        require 'parser/current'
+        parser = ::Parser::CurrentRuby
       else
-        parser = ::Prism::Translation::Parser34
-        if major >= 4
-          parser = ::Prism::Translation::Parser40
+        parser = prism_translation_parser_for(current_version)
+        unless parser
+          require 'parser/current'
+          parser = ::Parser::CurrentRuby
         end
       end
     end
 
-    RubyAstGen::Logger.debug "Using parser: #{parser}"
+    RubyAstGen::Logger.debug "Using parser: #{parser}" if log
     parser
+  end
+
+  def self.parser_info
+    parser = parser_for_current_ruby(log: false)
+
+    {
+      ruby_engine: defined?(RUBY_ENGINE) ? RUBY_ENGINE : "ruby",
+      ruby_version: RUBY_VERSION,
+      ruby_platform: RUBY_PLATFORM,
+      parser_backend: parser.to_s,
+      parser_gem_version: Gem.loaded_specs["parser"]&.version&.to_s,
+      prism_gem_version: Gem.loaded_specs["prism"]&.version&.to_s,
+      prism_translation_parsers: prism_translation_parser_names
+    }
+  end
+
+  def self.parser_info_text
+    info = parser_info
+    [
+      "Ruby engine: #{info[:ruby_engine]}",
+      "Ruby version: #{info[:ruby_version]}",
+      "Ruby platform: #{info[:ruby_platform]}",
+      "Parser backend: #{info[:parser_backend]}",
+      "Parser gem: #{info[:parser_gem_version] || 'unavailable'}",
+      "Prism gem: #{info[:prism_gem_version] || 'unavailable'}",
+      "Prism translation parsers: #{info[:prism_translation_parsers].empty? ? 'none' : info[:prism_translation_parsers].join(', ')}"
+    ].join("\n")
+  end
+
+  def self.prism_translation_parser_for(version)
+    major = version.segments[0]
+    minor = version.segments[1]
+    parser_class_name = "Parser#{major}#{minor}"
+
+    if defined?(::Prism::Translation) && ::Prism::Translation.const_defined?(parser_class_name)
+      return ::Prism::Translation.const_get(parser_class_name)
+    end
+
+    candidates = ::Prism::Translation.constants.filter_map do |const_name|
+      match = const_name.to_s.match(/\AParser(\d)(\d+)\z/)
+      next unless match
+
+      [match[1].to_i, match[2].to_i, ::Prism::Translation.const_get(const_name)]
+    end
+    target = [major, minor]
+    candidates.select { |candidate_major, candidate_minor, _parser| [candidate_major, candidate_minor] <= target }
+      .max_by { |candidate_major, candidate_minor, _parser| [candidate_major, candidate_minor] }&.last ||
+      candidates.max_by { |candidate_major, candidate_minor, _parser| [candidate_major, candidate_minor] }&.last
+  end
+
+  def self.prism_translation_parser_names
+    return [] unless defined?(::Prism::Translation)
+
+    ::Prism::Translation.constants.grep(/\AParser\d+\z/).map(&:to_s).sort
   end
 
   def self.parse_file(file_path, relative_input_path)

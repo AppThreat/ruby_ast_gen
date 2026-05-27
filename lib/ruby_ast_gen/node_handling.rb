@@ -4,22 +4,23 @@ module NodeHandling
   MAX_NESTING_DEPTH = 100
 
   SINGLETONS = %i[nil true false].freeze
-  LITERALS = %i[int float rational complex str sym].freeze
+  LITERALS = %i[int float rational complex str sym __FILE__ __LINE__ __ENCODING__].freeze
   CALLS = %i[send csend].freeze
   DYNAMIC_LITERALS = %i[dsym dstr].freeze
   CONTROL_KW = %i[break next].freeze
-  ARGUMENTS = %i[arg restarg blockarg kwrestarg shadowarg].freeze
+  ARGUMENTS = %i[arg restarg blockarg kwrestarg shadowarg itarg].freeze
   KW_ARGUMENTS = %i[kwarg kwnilarg kwoptarg].freeze
   REFS = %i[nth_ref back_ref].freeze
-  FORWARD_ARGUMENTS = %i[forward_args forwarded_args forward_arg].freeze
+  FORWARD_ARGUMENTS = %i[forward_args forwarded_args forward_arg forwarded_restarg
+    forwarded_kwrestarg].freeze
   ASSIGNMENTS = %i[or_asgn and_asgn lvasgn ivasgn gvasgn cvasgn match_with_lvasgn match_write].freeze
-  BIN_OP = %i[and or match_pattern match_pattern_p].freeze
+  BIN_OP = %i[and or in_match match_pattern match_pattern_p].freeze
   ACCESS = %i[self ident lvar cvar gvar ivar splat kwsplat block_pass
     match_var].freeze
   QUAL_ACCESS = [:casgn].freeze
   COLLECTIONS = %i[args array hash mlhs hash_pattern array_pattern
-    array_pattern_with_tail find_pattern undef procarg0].freeze
-  SPECIAL_CMD = %i[yield super defined? xstr].freeze
+    array_pattern_with_tail find_pattern kwargs undef procarg0].freeze
+  SPECIAL_CMD = %i[yield super defined? xstr not].freeze
   RANGE_OP = %i[erange irange eflipflop iflipflop].freeze
 
   def self.fetch_member(loc, method)
@@ -152,6 +153,10 @@ module NodeHandling
     when :match_alt
       base_map[:left] = children[0]
       base_map[:right] = children[1]
+    when :match_current_line
+      base_map[:value] = children[0]
+    when :match_with_trailing_comma
+      base_map[:value] = children[0]
     when :resbody
       base_map[:exec_list] = children[0]
       base_map[:exec_var] = children[1]
@@ -165,7 +170,7 @@ module NodeHandling
       base_map[:values] = children if children[0]
     when *CONTROL_KW
       base_map[:arguments] = children[0] if children[0]
-    when *FORWARD_ARGUMENTS, :retry, :zsuper, :match_nil_pattern
+    when *FORWARD_ARGUMENTS, :empty_else, :lambda, :retry, :zsuper, :match_nil_pattern
       # refer to :type
     when *QUAL_ACCESS
       base_map[:base] = children[0]
@@ -186,7 +191,8 @@ module NodeHandling
     when *KW_ARGUMENTS
       base_map[:key] = children[0]
       base_map[:value] = children[1]
-    when *LITERALS, *ARGUMENTS, *ACCESS, :match_rest
+    when *LITERALS, *ARGUMENTS, *ACCESS, :arg_expr, :blockarg_expr, :match_rest,
+      :numargs, :objc_restarg, :objc_varargs, :restarg_expr
       base_map[:value] = children[0]
     when :cbase
       base_map[:base] = children[0]
@@ -196,10 +202,20 @@ module NodeHandling
       base_map[:receiver] = children[0]
       base_map[:name] = children[1]
       base_map[:arguments] = children[2..] # Variable arguments
+    when :index
+      base_map[:receiver] = children[0]
+      base_map[:arguments] = children[1..]
+    when :indexasgn
+      base_map[:receiver] = children[0]
+      base_map[:arguments] = children[1...-1] || []
+      base_map[:value] = children[-1]
     when *SPECIAL_CMD
       base_map[:arguments] = children
 
     when :pair, :optarg
+      base_map[:key] = children[0]
+      base_map[:value] = children[1]
+    when :objc_kwarg
       base_map[:key] = children[0]
       base_map[:value] = children[1]
     when :const
