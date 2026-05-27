@@ -20,6 +20,10 @@ RSpec.describe RubyAstGen do
     temp_file.rewind
   end
 
+  def expect_no_unhandled_node_warning
+    expect(RubyAstGen::Logger).not_to receive(:warn).with(/Unhandled AST node type/)
+  end
+
   it "should parse a class successfully" do
     code(<<~CODE)
       class Foo
@@ -386,6 +390,82 @@ RSpec.describe RubyAstGen do
       RUBY
       ast = RubyAstGen.parse_file(temp_file.path, temp_name)
       expect(ast).not_to be_nil
+    end
+  end
+
+  context "Modern and edge syntax coverage" do
+    it "handles anonymous rest, keyword-rest, and block forwarding explicitly", if: (Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.2")) do
+      code(<<~RUBY)
+        def wrapper(*, **, &)
+          target(*, **, &)
+        end
+      RUBY
+
+      expect_no_unhandled_node_warning
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+
+      expect(ast).not_to be_nil
+      expect(ast[:body][:arguments].first[:type]).to eq("forwarded_restarg")
+      expect(ast[:body][:arguments][1][:children].first[:type]).to eq("forwarded_kwrestarg")
+      expect(ast[:body][:arguments][2][:type]).to eq("block_pass")
+    end
+
+    it "parses a broad corpus of current Ruby syntax without generic node warnings", if: (Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("4.0.0")) do
+      code(<<~RUBY)
+        x = 1
+        guard = true
+        value = {a: x, b: [x, 2, 3]}
+
+        result = case value
+                 in {a:, b: [^x, *rest], **nil} if guard
+                   rest
+                 in [*, 1, *] => found
+                   found
+                 else
+                   nil
+                 end
+
+        range_values = [..10, 1.., ...10, 1...]
+        lambda_value = ->(item, scale = 2, *rest, flag:, **kw, &blk) { item * scale }
+        transformed = [1, 2, 3].map { _1 + 1 }.select { it > 2 }
+        rightward = transformed => captured
+        maybe = object&.call(**nil)
+        args = [*nil]
+        regexp = /\#{x}\n/imx
+      RUBY
+
+      expect_no_unhandled_node_warning
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+
+      expect(ast).not_to be_nil
+    end
+
+    it "serializes parser edge node types with stable semantic keys" do
+      RubyAstGen.parser_for_current_ruby
+      send_node = Parser::AST::Node.new(:send, [nil, :receiver])
+      int_node = Parser::AST::Node.new(:int, [1])
+      value_node = Parser::AST::Node.new(:str, ["value"])
+      nodes = [
+        Parser::AST::Node.new(:index, [send_node, int_node]),
+        Parser::AST::Node.new(:indexasgn, [send_node, int_node, value_node]),
+        Parser::AST::Node.new(:arg_expr, [send_node]),
+        Parser::AST::Node.new(:restarg_expr, [send_node]),
+        Parser::AST::Node.new(:blockarg_expr, [send_node]),
+        Parser::AST::Node.new(:objc_kwarg, [:label, :name]),
+        Parser::AST::Node.new(:numargs, [2]),
+        Parser::AST::Node.new(:empty_else, []),
+        Parser::AST::Node.new(:lambda, [])
+      ]
+
+      expect_no_unhandled_node_warning
+      json_nodes = nodes.map { |node| NodeHandling.ast_to_json(node, "", file_path: temp_name) }
+
+      expect(json_nodes.map { |node| node[:type] }).to include("index", "indexasgn", "objc_kwarg", "empty_else", "lambda")
+      expect(json_nodes[0][:receiver][:type]).to eq("send")
+      expect(json_nodes[1][:value][:type]).to eq("str")
+      expect(json_nodes[5][:key]).to eq(:label)
+      expect(json_nodes[7]).not_to have_key(:children)
+      expect(json_nodes[8]).not_to have_key(:children)
     end
   end
   

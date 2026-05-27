@@ -123,28 +123,44 @@ module RubyAstGen
       require 'parser/current'
       parser = ::Parser::CurrentRuby
     else
-      require 'prism'
       begin
+        require 'prism'
         require 'prism/translation'
       rescue LoadError
-      end
-
-      major = current_version.segments[0]
-      minor = current_version.segments[1]
-      parser_class_name = "Parser#{major}#{minor}"
-
-      if defined?(::Prism::Translation) && ::Prism::Translation.const_defined?(parser_class_name)
-        parser = ::Prism::Translation.const_get(parser_class_name)
+        require 'parser/current'
+        parser = ::Parser::CurrentRuby
       else
-        parser = ::Prism::Translation::Parser34
-        if major >= 4
-          parser = ::Prism::Translation::Parser40
+        parser = prism_translation_parser_for(current_version)
+        unless parser
+          require 'parser/current'
+          parser = ::Parser::CurrentRuby
         end
       end
     end
 
     RubyAstGen::Logger.debug "Using parser: #{parser}"
     parser
+  end
+
+  def self.prism_translation_parser_for(version)
+    major = version.segments[0]
+    minor = version.segments[1]
+    parser_class_name = "Parser#{major}#{minor}"
+
+    if defined?(::Prism::Translation) && ::Prism::Translation.const_defined?(parser_class_name)
+      return ::Prism::Translation.const_get(parser_class_name)
+    end
+
+    candidates = ::Prism::Translation.constants.filter_map do |const_name|
+      match = const_name.to_s.match(/\AParser(\d)(\d+)\z/)
+      next unless match
+
+      [match[1].to_i, match[2].to_i, ::Prism::Translation.const_get(const_name)]
+    end
+    target = [major, minor]
+    candidates.select { |candidate_major, candidate_minor, _parser| [candidate_major, candidate_minor] <= target }
+      .max_by { |candidate_major, candidate_minor, _parser| [candidate_major, candidate_minor] }&.last ||
+      candidates.max_by { |candidate_major, candidate_minor, _parser| [candidate_major, candidate_minor] }&.last
   end
 
   def self.parse_file(file_path, relative_input_path)
