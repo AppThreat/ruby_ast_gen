@@ -29,8 +29,10 @@ while i < ARGV.size
     i += 1
     options[:exclude] = ARGV[i]
   when "-d", "--debug"
-    i += 1
     options[:debug] = true
+  when "--parser-info"
+    puts RubyAstGen.parser_info_text
+    exit
   when "--version"
     puts RubyAstGen::VERSION
     exit
@@ -41,6 +43,7 @@ while i < ARGV.size
         -o, --output     The output directory (default: '.ast')
         -e, --exclude    The exclusion regex (default: '^(tests?|vendor|spec)')
         -d, --debug      Enable debug logging
+            --parser-info Print parser/runtime capability information
             --version    Print the version
             --help       Print usage
     HELP

@@ -33,14 +33,25 @@ usage: ruby_ast_gen [options]
     -o, --output   The output directory
     -e, --exclude  The exclusion regex
     -l, --log      The logging level
+    --parser-info  Print parser/runtime capability information
     --version      Print the version
     --help         Print usage
+```
+
+To inspect which parser backend will be used in the current runtime, run:
+
+```bash
+exe/ruby_ast_gen --parser-info
 ```
 
 ## Development
 
 After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can
 also run `bin/console` for an interactive prompt that will allow you to experiment.
+
+The test suite includes a syntax fixture corpus under `spec/fixtures/syntax` and JSON shape contract specs. Add small
+fixtures there when supporting new Ruby syntax; use a leading `# min_ruby: x.y.z` comment for syntax that only parses on
+newer runtimes.
 
 To install this gem onto your local machine, run `bundle exec rake install`. To package, run `rake build`.
 
