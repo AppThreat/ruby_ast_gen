@@ -8,56 +8,42 @@ $LOAD_PATH.unshift(*Dir.glob(libs))
 
 require_relative "../lib/ruby_ast_gen"
 
-options = {
-  input: nil,
-  output: ".ast",
-  exclude: "^(tests?|vendor|spec)",
-  debug: false
-}
+# Argument parsing and the usage text both come from RubyAstGen::CLI::FLAGS.
+result = RubyAstGen::CLI.parse(ARGV)
+options = result.options
 
-# Parse ARGV manually
-i = 0
-while i < ARGV.size
-  case ARGV[i]
-  when "-i", "--input"
-    i += 1
-    options[:input] = ARGV[i]
-  when "-o", "--output"
-    i += 1
-    options[:output] = ARGV[i]
-  when "-e", "--exclude"
-    i += 1
-    options[:exclude] = ARGV[i]
-  when "-d", "--debug"
-    options[:debug] = true
-  when "--parser-info"
-    puts RubyAstGen.parser_info_text
-    exit
-  when "--version"
-    puts RubyAstGen::VERSION
-    exit
-  when "--help"
-    puts <<~HELP
-      Usage:
-        -i, --input      The input file or directory (required)
-        -o, --output     The output directory (default: '.ast')
-        -e, --exclude    The exclusion regex (default: '^(tests?|vendor|spec)')
-        -d, --debug      Enable debug logging
-            --parser-info Print parser/runtime capability information
-            --version    Print the version
-            --help       Print usage
-    HELP
-    exit
-  else
-    puts "Unknown option: #{ARGV[i]}"
-    exit 1
-  end
-  i += 1
+# Configure logging before emitting anything, so -l/--log applies to the argument warnings too.
+RubyAstGen::Logger.level = :debug if options[:debug]
+RubyAstGen::Logger.level = options[:log_level] if options[:log_level]
+result.warnings.each { |warning| RubyAstGen::Logger.warn warning }
+
+# Informational modes run after the whole argv is read, so `--parser-info` reflects a
+# `--parser-target` passed in any order.
+case result.mode
+when :parser_info
+  puts RubyAstGen.parser_info_text(parser_target: options[:parser_target])
+  exit
+when :version
+  puts RubyAstGen::VERSION
+  exit
+when :help
+  puts RubyAstGen::CLI.help_text
+  exit
 end
 
-if options[:input].nil?
-  puts "Error: '-i' or '--input' is required."
+# Usage errors are the only fatal cases: everything a run encounters per file is reported and
+# skipped instead, because a non-zero exit costs the caller every file (see the comment in
+# RubyAstGen::CLI.parse).
+begin
+  RubyAstGen.parse(options)
+rescue ArgumentError => e
+  RubyAstGen::Logger.error e.message
+  exit 1
+rescue StandardError => e
+  # Anything unexpected (an unwritable output directory, for example) still exits with a single
+  # readable line: the caller only sees our stdout, and a raw backtrace tells it nothing about
+  # which input it was invoked with. The backtrace is available with -d.
+  RubyAstGen::Logger.error "#{e.class}: #{e.message}"
+  RubyAstGen::Logger.debug e.backtrace.join("\n")
   exit 1
 end
-
-RubyAstGen.parse(options)

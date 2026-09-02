@@ -454,18 +454,129 @@ RSpec.describe RubyAstGen do
         Parser::AST::Node.new(:objc_kwarg, [:label, :name]),
         Parser::AST::Node.new(:numargs, [2]),
         Parser::AST::Node.new(:empty_else, []),
-        Parser::AST::Node.new(:lambda, [])
+        Parser::AST::Node.new(:lambda, []),
+        Parser::AST::Node.new(:kwargs, [Parser::AST::Node.new(:hash, [])]),
+        Parser::AST::Node.new(:blocknilarg, []),
+        Parser::AST::Node.new(:itblock, [send_node, :it, int_node])
       ]
 
       expect_no_unhandled_node_warning
       json_nodes = nodes.map { |node| NodeHandling.ast_to_json(node, "", file_path: temp_name) }
 
-      expect(json_nodes.map { |node| node[:type] }).to include("index", "indexasgn", "objc_kwarg", "empty_else", "lambda")
+      expect(json_nodes.map { |node| node[:type] }).to include("index", "indexasgn", "objc_kwarg", "empty_else", "lambda", "kwargs", "blocknilarg", "itblock")
       expect(json_nodes[0][:receiver][:type]).to eq("send")
       expect(json_nodes[1][:value][:type]).to eq("str")
       expect(json_nodes[5][:key]).to eq(:label)
       expect(json_nodes[7]).not_to have_key(:children)
       expect(json_nodes[8]).not_to have_key(:children)
+      expect(json_nodes[9][:children].first[:type]).to eq("hash")
+      expect(json_nodes[10]).to include(value: nil)
+      expect(json_nodes[11][:param]).to eq(:it)
+      expect(json_nodes[11][:call]).to include(type: "send", name: :receiver)
+      expect(json_nodes[11][:body]).to include(type: "int", value: 1)
+    end
+  end
+
+  context "Parser target decoupling" do
+    it "prefers a Prism translation parser by default", if: SpecCapabilities::PRISM do
+      parser = RubyAstGen.parser_for_current_ruby(log: false)
+      expect(parser.to_s).to eq(RubyAstGen.newest_prism_translation_parser.to_s)
+      expect(parser.to_s).to match(/\APrism::Translation::Parser\d+\z/)
+    end
+
+    it "selects the exact grammar requested via parser_target", if: SpecCapabilities::PRISM do
+      parser = RubyAstGen.parser_for_current_ruby(log: false, parser_target: "3.4")
+      expect(parser.to_s).to eq("Prism::Translation::Parser34")
+    end
+
+    it "falls back to the parser gem grammar for versions prism does not translate" do
+      parser = RubyAstGen.parser_for_current_ruby(log: false, parser_target: "2.7")
+      expect(parser.to_s).to eq("Parser::Ruby27")
+    end
+
+    it "treats a missing minor version as .0" do
+      expect(RubyAstGen.version_pair("4")).to eq([4, 0])
+      expect(RubyAstGen.parser_for_current_ruby(log: false, parser_target: "3").to_s).to eq("Parser::Ruby30")
+    end
+
+    it "falls back to the newest grammar for a target no grammar provides", if: SpecCapabilities::PRISM do
+      parser = RubyAstGen.parser_for_current_ruby(log: false, parser_target: "9.9")
+      expect(parser).to eq(RubyAstGen.newest_prism_translation_parser)
+    end
+
+    it "parses Ruby 4.0 leading operators with the newest-grammar default", if: SpecCapabilities::PRISM do
+      code(<<~RUBY)
+        x = a
+          && b
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name)
+      expect(ast).not_to be_nil
+    end
+
+    it "retries with the newest grammar when the selected target rejects the syntax", if: SpecCapabilities::PRISM do
+      code(<<~RUBY)
+        x = a
+          && b
+      RUBY
+      ast = RubyAstGen.parse_file(temp_file.path, temp_name, parser_target: "3.3")
+      expect(ast).not_to be_nil
+      expect(ast[:parser_backend]).to eq(RubyAstGen.newest_prism_translation_parser.to_s)
+    end
+
+    it "does not retry when the newest grammar is the one that failed", if: SpecCapabilities::PRISM do
+      expect(RubyAstGen.syntax_retry_parser(RubyAstGen.newest_prism_translation_parser)).to be_nil
+    end
+
+    it "still rejects files no grammar can parse" do
+      code("def foo(")
+      expect(RubyAstGen.parse_file(temp_file.path, temp_name)).to be_nil
+    end
+
+    it "accepts --parser-target from the CLI", if: SpecCapabilities::PRISM do
+      require "tmpdir"
+      require "open3"
+      require "rbconfig"
+      exe = File.expand_path("../exe/ruby_ast_gen", __dir__)
+      source_file = Tempfile.new(["parser_target", ".rb"])
+      out_dir = Dir.mktmpdir
+      begin
+        source_file.write("x = a\n  && b\n")
+        source_file.rewind
+        _stdout, _stderr, status = Open3.capture3(RbConfig.ruby, exe, "-i", source_file.path, "-o", out_dir, "-e", "ZZZNOMATCH", "--parser-target", "4.0")
+        expect(status).to be_success
+        expect(File).to exist(File.join(out_dir, "#{File.basename(source_file.path)}.json"))
+      ensure
+        source_file.close
+        source_file.unlink
+        FileUtils.remove_entry(out_dir) rescue nil
+      end
+    end
+
+    it "raises for an invalid parser_target instead of exiting" do
+      # Exiting is the CLI's job (see exe/ruby_ast_gen); the library raises so an embedded
+      # caller does not lose its process over one bad option.
+      expect { RubyAstGen.validated_parser_target("banana") }
+        .to raise_error(ArgumentError, /Invalid --parser-target 'banana'/)
+    end
+
+    it "exits with an error for an invalid --parser-target" do
+      require "tmpdir"
+      require "open3"
+      require "rbconfig"
+      exe = File.expand_path("../exe/ruby_ast_gen", __dir__)
+      source_file = Tempfile.new(["parser_target", ".rb"])
+      out_dir = Dir.mktmpdir
+      begin
+        source_file.write("x = 1")
+        source_file.rewind
+        stdout, stderr, status = Open3.capture3(RbConfig.ruby, exe, "-i", source_file.path, "-o", out_dir, "--parser-target", "banana")
+        expect(status).not_to be_success
+        expect(stdout + stderr).to include("Invalid --parser-target")
+      ensure
+        source_file.close
+        source_file.unlink
+        FileUtils.remove_entry(out_dir) rescue nil
+      end
     end
   end
   

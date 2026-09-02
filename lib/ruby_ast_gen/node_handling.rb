@@ -1,14 +1,90 @@
 # frozen_string_literal: true
 
 module NodeHandling
-  MAX_NESTING_DEPTH = 100
+  # AST levels to emit before truncating. Each emitted level costs at most two JSON nesting
+  # levels (the node object and the array/hash holding its children), so the JSON nesting limit
+  # must always be derived from this cap via .json_nesting_limit — JSON.generate's default of
+  # 100 dies at an AST depth of ~49, which used to make serialization fail and cost the whole
+  # file for inputs this cap never saw.
+  MAX_NESTING_DEPTH = 250
+
+  # The JSON.generate max_nesting that always accepts a tree truncated at +max_depth+ AST
+  # levels (+2 for the deepest node's own meta_data, plus headroom).
+  def self.json_nesting_limit(max_depth = MAX_NESTING_DEPTH)
+    max_depth * 2 + 16
+  end
+
+  # A pre-rendered piece of output. Payload values are never Fragments, which is how the writer
+  # below tells punctuation it queued from data it still has to render.
+  Fragment = Struct.new(:text)
+
+  OPEN_OBJECT = Fragment.new("{").freeze
+  CLOSE_OBJECT = Fragment.new("}").freeze
+  CLOSE_ARRAY = Fragment.new("]").freeze
+  COMMA = Fragment.new(",").freeze
+
+  # Serializes the payload without recursion.
+  #
+  # `JSON.generate` recurses once per nesting level, and how deep that can go is a property of the
+  # runtime, not of the JSON: on CRuby the C extension manages ~100_000 levels, but on TruffleRuby
+  # it runs through Sulong and a tree truncated at the default cap of 250 AST levels exhausts a
+  # worker thread's stack. The file was then logged and skipped — the outcome the depth cap exists
+  # to prevent, and one that made the output depend on the interpreter. Iterating has no depth
+  # limit, so a file that parses is emitted on every runtime. Scalars still go through the stdlib,
+  # since that is where the escaping rules live.
+  def self.dump_json(value)
+    out = +""
+    stack = [value]
+
+    until stack.empty?
+      item = stack.pop
+      case item
+      when Fragment
+        out << item.text
+      when Hash
+        out << "{"
+        queued = []
+        item.each_with_index do |(key, nested), index|
+          queued << Fragment.new("#{index.zero? ? "" : ","}#{key.to_s.to_json}:")
+          queued << nested
+        end
+        queued << CLOSE_OBJECT
+        stack.concat(queued.reverse!)
+      when Array
+        out << "["
+        queued = []
+        item.each_with_index do |nested, index|
+          queued << COMMA unless index.zero?
+          queued << nested
+        end
+        queued << CLOSE_ARRAY
+        stack.concat(queued.reverse!)
+      else
+        out << json_scalar(item)
+      end
+    end
+
+    out
+  end
+
+  # Scalars are rendered exactly as JSON.generate would, including UTF-8 passed through unescaped.
+  def self.json_scalar(value)
+    case value
+    when nil then "null"
+    when true then "true"
+    when false then "false"
+    when Integer then value.to_s
+    when Symbol then value.to_s.to_json
+    else value.to_json
+    end
+  end
 
   SINGLETONS = %i[nil true false].freeze
   LITERALS = %i[int float rational complex str sym __FILE__ __LINE__ __ENCODING__].freeze
   CALLS = %i[send csend].freeze
   DYNAMIC_LITERALS = %i[dsym dstr].freeze
   CONTROL_KW = %i[break next].freeze
-  ARGUMENTS = %i[arg restarg blockarg kwrestarg shadowarg itarg].freeze
+  ARGUMENTS = %i[arg restarg blockarg kwrestarg shadowarg itarg blocknilarg].freeze
   KW_ARGUMENTS = %i[kwarg kwnilarg kwoptarg].freeze
   REFS = %i[nth_ref back_ref].freeze
   FORWARD_ARGUMENTS = %i[forward_args forwarded_args forward_arg forwarded_restarg
@@ -23,13 +99,54 @@ module NodeHandling
   SPECIAL_CMD = %i[yield super defined? xstr not].freeze
   RANGE_OP = %i[erange irange eflipflop iflipflop].freeze
 
+  # A missing location member is expected for synthesized nodes, so it degrades to -1. The rescue
+  # is narrow on purpose (plan 03 §9): a bare `rescue` also hid genuine shape changes in the
+  # parser's location classes behind a plausible-looking offset.
   def self.fetch_member(loc, method)
     loc.public_send(method)
-  rescue
+  rescue NoMethodError => e
+    RubyAstGen::Logger.debug "No location member '#{method}' on #{loc.class}: #{e.message}"
     -1
   end
 
-  def self.ast_to_json(node, code, current_depth: 0, file_path: nil)
+  # Syntax facts the parser's locations already know, attached at the node level (plan 02 §4).
+  # Keys are emitted only when the fact holds, so the plain form stays key-less — the same
+  # convention as optional per-type keys like superclass. All values were verified identical on
+  # the prism translation and the parser gem.
+  #
+  #   send/csend: call_operator ("." | "::" | "&.") when the call carries an explicit operator,
+  #     and has_parentheses when it was written with parentheses. A block node's begin/end are
+  #     `do`/`{` and `end`/`}`, so blocks deliberately get no has_parentheses key.
+  #   heredoc strings: heredoc: true plus the character offsets of the body. meta_data covers
+  #     only the `<<~SQL` marker, so these offsets are the only way to reach the body text
+  #     without re-lexing the source.
+  #   array: percent_array ("%w" | "%i" | "%W" | "%I") when the literal used percent notation,
+  #     regardless of the delimiter that follows it.
+  def self.syntax_metadata(node_type, loc)
+    metadata = {}
+    return metadata unless loc
+
+    if CALLS.include?(node_type)
+      dot = loc.respond_to?(:dot) ? loc.dot : nil
+      metadata[:call_operator] = dot.source if dot
+      metadata[:has_parentheses] = true if loc.begin && loc.end
+    elsif loc.is_a?(::Parser::Source::Map::Heredoc)
+      metadata[:heredoc] = true
+      metadata[:heredoc_body_start] = loc.heredoc_body.begin_pos
+      metadata[:heredoc_body_end] = loc.heredoc_body.end_pos
+    elsif node_type == :array && loc.begin
+      prefix = loc.begin.source[/\A%[wiWI]/]
+      metadata[:percent_array] = prefix if prefix
+    end
+    metadata
+  end
+
+  # +state+ accumulates the truncation count for one file. It is threaded through the recursion
+  # (not kept in module state) because 10 worker threads share this module: a shared counter
+  # would race and attribute one file's truncations to another. The caller reads the count to
+  # emit one warning per file and the top-level truncated_nodes key.
+  def self.ast_to_json(node, code, current_depth: 0, file_path: nil, max_depth: MAX_NESTING_DEPTH,
+    state: {truncated: 0, first_type: nil})
     return unless node.is_a?(Parser::AST::Node)
 
     loc = node.location
@@ -42,9 +159,10 @@ module NodeHandling
       offset_end: loc&.expression&.end_pos,
       code: extract_code_snippet(loc, code)
     }
-    if current_depth >= MAX_NESTING_DEPTH
-      RubyAstGen::Logger.warn "Reached max JSON depth on a #{node.type} node"
-      return {type: node.type.to_s, meta_data: meta_data, nested: true}
+    if current_depth >= max_depth
+      state[:truncated] += 1
+      state[:first_type] ||= node.type.to_s
+      return {type: node.type.to_s, meta_data: meta_data, nested: true, truncated: true}
     end
 
     base_hash = {
@@ -52,13 +170,18 @@ module NodeHandling
       meta_data: meta_data,
       children: node.children.map do |child|
         if child.is_a?(Parser::AST::Node)
-          ast_to_json(child, code, current_depth: current_depth + 1, file_path: file_path) # Recursively process child nodes
+          ast_to_json(child, code, current_depth: current_depth + 1, file_path: file_path,
+            max_depth: max_depth, state: state) # Recursively process child nodes
         else
           child # If it's not a node (e.g., literal), return as-is
         end
       end
     }
     add_node_properties(node.type, base_hash, file_path)
+    # Truncated nodes keep their documented {type, meta_data, nested, truncated} shape, which is
+    # why this happens after the truncation return above.
+    metadata = syntax_metadata(node.type, loc)
+    base_hash.merge!(metadata) unless metadata.empty?
     base_hash
   end
 
@@ -232,7 +355,8 @@ module NodeHandling
       base_map[:end] = children[1]
     when :itblock
       base_map[:call] = children[0]
-      base_map[:body] = children[1]
+      base_map[:param] = children[1]
+      base_map[:body] = children[2]
     when :numblock
       base_map[:call] = children[0]
       base_map[:param_idx] = children[1]
@@ -245,19 +369,10 @@ module NodeHandling
     when :preexe, :postexe
       base_map[:body] = children[0]
 
-    when :kwnilarg
-      base_map[:call] = node_type.to_s
-      base_map[:body] = false
-    when :kwrestarg
-      base_map[:name] = children[0]
-      if children[1]
-        base_map[:value] = children[1]
-      end
-
     when :pin
       base_map[:value] = children[0]
 
-    when *COLLECTIONS, *DYNAMIC_LITERALS, *REFS
+    when *COLLECTIONS, *DYNAMIC_LITERALS
       # put :children back
       base_map[:children] = children
 
