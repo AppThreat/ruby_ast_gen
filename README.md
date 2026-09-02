@@ -149,7 +149,9 @@ Send and safe-navigation nodes carry explicit call syntax facts, so consumers do
 guess from the whitespace-normalized `code` snippet: `call_operator` (`"."`, `"::"`, or `"&."`)
 when the call has an explicit operator, and `has_parentheses: true` when it was written with
 parentheses. Percent-notation arrays carry `percent_array` (`"%w"`, `"%i"`, `"%W"`, `"%I"`,
-whatever the delimiter), and heredoc strings carry `heredoc: true` plus
+whatever the delimiter), regexp options carry `options` (`["i", "m", "x"]` for `/x/imx` — the
+older `value` key holds only the first flag and is kept for compatibility), and heredoc strings
+carry `heredoc: true` plus
 `heredoc_body_start`/`heredoc_body_end` character offsets — `meta_data.code` still covers only
 the `<<~SQL` marker, so those offsets are the only way to reach the body text. All of these keys
 are emitted only when the fact holds (the plain form stays key-less), and both parser backends

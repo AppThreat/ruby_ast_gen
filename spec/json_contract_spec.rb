@@ -45,7 +45,8 @@ RSpec.describe "JSON shape contracts" do
     end
   end
 
-  def flatten_nodes(node)    return [] unless node.is_a?(Hash)
+  def flatten_nodes(node)
+    return [] unless node.is_a?(Hash)
 
     nested = node.values.flat_map do |value|
       case value
@@ -271,7 +272,8 @@ RSpec.describe "JSON shape contracts" do
       "kwrestarg" => { type: "kwrestarg", value: :opts },
       "blockarg" => { type: "blockarg", value: :blk },
       "kwnilarg" => { type: "kwnilarg", key: nil, value: nil },
-      "regopt" => { type: "regopt", value: :i },
+      # options is additive (plan 05 §1): value keeps the first flag, options carries all of them.
+      "regopt" => { type: "regopt", value: :i, options: ["i"] },
       "nth_ref" => { type: "nth_ref", value: 1 }
     }
 
@@ -342,7 +344,7 @@ RSpec.describe "JSON shape contracts" do
             receiver: {
               type: "regexp",
               value: {type: "str", value: "x"},
-              opt: {type: "regopt", value: :i}
+              opt: {type: "regopt", value: :i, options: ["i"]}
             },
             name: :"match?",
             arguments: [{type: "str", value: "x"}],
@@ -548,6 +550,93 @@ RSpec.describe "JSON shape contracts" do
       expect(misplaced).not_to have_key(:has_sig)
       # The sig block precedes a send (attr_reader), not a def: nothing is marked anywhere.
       all_defs(ast).each { |node| expect(node).not_to have_key(:has_sig) }
+    end
+  end
+
+  describe "operator and literal forms (plan 05 §1)" do
+    OPERATORS_FIXTURE = File.expand_path("fixtures/syntax/operators.rb", __dir__)
+
+    def operators_ast
+      @operators_ast ||= parse_source(File.read(OPERATORS_FIXTURE))
+    end
+
+    def nodes_of_type(type)
+      flatten_nodes(operators_ast).select { |node| node[:type] == type }
+    end
+
+    it "emits flip-flops as their own node types with both sides" do
+      # Flip-flops are only reachable as a condition, which is why nothing else in the corpus
+      # reached them: `..` is iflipflop, `...` is eflipflop, and both carry start/end like a range.
+      inclusive = nodes_of_type("iflipflop")
+      exclusive = nodes_of_type("eflipflop")
+
+      expect(inclusive.size).to eq(1)
+      expect(exclusive.size).to eq(1)
+      [inclusive, exclusive].flatten.each do |node|
+        expect_metadata_shape(node)
+        expect(node.keys).to contain_exactly(:type, :meta_data, :start, :end)
+        expect(node[:start][:type]).to eq("send")
+        expect(node[:end][:type]).to eq("send")
+      end
+      expect(inclusive.first[:meta_data][:code]).to include("..")
+    end
+
+    it "emits defined? under its own type, keeping the question mark" do
+      # The node type is the keyword including `?`; a consumer matching on "defined" finds nothing.
+      defineds = nodes_of_type("defined?")
+
+      expect(defineds).not_to be_empty
+      defineds.each do |node|
+        expect(node.keys).to contain_exactly(:type, :meta_data, :arguments)
+        expect(node[:arguments]).not_to be_nil
+      end
+      expect(defineds.map { |node| node[:meta_data][:code] }).to include("defined?(config)")
+    end
+
+    it "lowers `not` to the same send as `!`" do
+      negations = nodes_of_type("send").select { |node| node[:name] == :! }
+
+      expect(negations.map { |node| node[:meta_data][:code] }).to eq(["not value"])
+      expect(negations.first[:receiver]).not_to be_nil
+    end
+
+    it "marks a safe-navigation chain on every link" do
+      chain = nodes_of_type("csend")
+
+      expect(chain).not_to be_empty
+      chain.each { |node| expect(node[:call_operator]).to eq("&.") }
+      expect(chain.map { |node| node[:name] }).to include(:upcase, :[])
+    end
+
+    it "names every percent-array form" do
+      expect(nodes_of_type("array").filter_map { |node| node[:percent_array] })
+        .to contain_exactly("%i", "%w", "%W", "%I")
+    end
+
+    it "keeps every regexp option, not just the first" do
+      # `/combined/imx` parses to s(:regopt, :i, :m, :x). `value` is the first flag, as it always
+      # was; `options` is the whole set, and an option-less regexp carries neither key.
+      options = nodes_of_type("regopt")
+
+      expect(options.map { |node| node[:options] }.compact)
+        .to contain_exactly(["i"], ["x"], ["m"], %w[i m x])
+      options.select { |node| node[:options].nil? }
+        .each { |node| expect(node).not_to have_key(:value) }
+      combined = options.find { |node| node[:options] == %w[i m x] }
+      expect(combined[:value]).to eq(:i)
+    end
+
+    it "emits rational and complex literals with their computed values" do
+      # The AST carries Rational/Complex objects; JSON renders them through to_s (`"3/1"`).
+      expect(nodes_of_type("rational").map { |node| node[:value].to_s }).to include("3/1", "3/2")
+      expect(nodes_of_type("complex").map { |node| node[:value].to_s }).to include("0+2i")
+    end
+
+    it "emits beginless and endless ranges with the missing side null" do
+      ranges = nodes_of_type("irange")
+
+      expect(ranges.map { |node| [node[:start].nil?, node[:end].nil?] })
+        .to include([false, true], [true, false])
     end
   end
 

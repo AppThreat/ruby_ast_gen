@@ -346,7 +346,13 @@ module NodeHandling
     when :ensure
       base_map[:statement] = children[0]
       base_map[:body] = children[1]
-    when :regopt, *REFS, :redo
+    when :regopt
+      # `/x/imx` parses to s(:regopt, :i, :m, :x), so a single `value` loses every flag but the
+      # first. `value` stays as it was for readers that predate `options`; `options` carries all
+      # of them, and an option-less regexp keeps both keys absent.
+      base_map[:value] = children[0] if children[0]
+      base_map[:options] = children.compact.map(&:to_s) if children.compact.any?
+    when *REFS, :redo
       base_map[:value] = children[0] if children[0]
     when :return
       base_map[:values] = children if children[0]
