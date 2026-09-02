@@ -1,6 +1,7 @@
 require 'fileutils'
 require 'json'
 require 'thread'
+require 'time'
 
 require_relative 'ruby_ast_gen/version'
 require_relative 'ruby_ast_gen/node_handling'
@@ -81,6 +82,17 @@ module RubyAstGen
     [StandardError, SystemStackError].freeze
   end
 
+  # Side-records of a run. Both live *inside* the output directory and both end in `.jsonl`
+  # on purpose: chen feeds every file ending in `.json` to its JSON AST reader, which requires
+  # a top-level file_path (plan 04 §10.2), so a `.json` side-record would silently miscount
+  # every run (plan 03 §3/§4).
+  DIAGNOSTICS_FILENAME = "ruby_ast_gen_diagnostics.jsonl"
+  MANIFEST_FILENAME = "ruby_ast_gen_manifest.jsonl"
+
+  # Per-file warning entries kept in the top-level diagnostics array before the rest are cut
+  # (diagnostics_truncated marks the cut). The full list stays on stdout for -l debug readers.
+  DIAGNOSTICS_CAP = 50
+
   def self.parse(opts)
     # Apply the level before anything can log, and specifically before the worker threads in
     # process_directory are spawned: they inherit whatever is configured here.
@@ -102,17 +114,33 @@ module RubyAstGen
 
     FileUtils.mkdir_p(output_dir)
 
+    # Per-run aggregate, shared by the worker threads. The mutex guards every update: each
+    # counter would otherwise race across the 10 workers, and the truncation counter in
+    # NodeHandling is per-file state for exactly this reason. No module-level state, so
+    # concurrent or repeated parses cannot pollute each other.
+    state = {
+      mutex: Mutex.new, parsed: 0, failed: 0, skipped_nonruby: 0, excluded: 0,
+      truncated_files: 0, parse_errors: []
+    }
+
     if File.file?(input_path)
       process_file(input_path, output_dir, exclude_regex, input_path, parser_target: parser_target,
-        max_depth: max_depth)
+        max_depth: max_depth, state: state)
     elsif File.directory?(input_path)
       process_directory(input_path, output_dir, exclude_regex, threads, parser_target: parser_target,
-        max_depth: max_depth)
+        max_depth: max_depth, state: state)
     else
       # Usage errors are raised, not logged-and-exited: the caller decides the exit status, and
       # the message must not be silenceable by --log (it is the only output of a failed run).
       raise ArgumentError, "#{input_path} is neither a file nor a directory."
     end
+
+    # The manifest is both written and returned: the CLI reads files_failed off it to implement
+    # --fail-on-error.
+    manifest = manifest_for(input_path, output_dir, state, threads: threads, max_depth: max_depth,
+      parser_target: parser_target)
+    write_run_records(output_dir, state, manifest)
+    manifest
   end
 
   private
@@ -162,9 +190,10 @@ module RubyAstGen
     Logger.warn "Invalid --max-depth '#{value}'; using the default of #{NodeHandling::MAX_NESTING_DEPTH}."
     NodeHandling::MAX_NESTING_DEPTH
   end
-  # Process a single file and generate its AST
+  # Process a single file and generate its AST. +state+ is the per-run aggregate (see .parse);
+  # every outcome is recorded there so the manifest can report what a run actually did.
   def self.process_file(file_path, output_dir, exclude_regex, base_dir, parser_target: nil,
-    max_depth: NodeHandling::MAX_NESTING_DEPTH)
+    max_depth: NodeHandling::MAX_NESTING_DEPTH, state: nil)
     # Get the relative path of the file to apply exclusion rules
     relative_path = file_path.sub(%r{^.*\/}, '')
     # In single-file mode the caller passes the file itself as base_dir, so the sub below would be
@@ -179,20 +208,39 @@ module RubyAstGen
     # Skip if the file matches the exclusion regex
     if exclude_regex && exclude_regex.match?(relative_input_path)
       RubyAstGen::Logger.debug "Excluding: #{relative_input_path}"
+      # Directory runs filter at scan time, so this only fires (and counts) for single-file inputs.
+      count_state(state, :excluded)
       return
     end
 
-    return unless ruby_file?(file_path) # Skip if it's not a Ruby-related file
+    unless ruby_file?(file_path) # Skip if it's not a Ruby-related file
+      count_state(state, :skipped_nonruby)
+      return
+    end
 
+    file_result = {outcome: :empty, parse_error: nil}
     begin
-      ast = parse_file(file_path, relative_input_path, parser_target: parser_target, max_depth: max_depth)
-      return unless ast
+      ast = parse_file(file_path, relative_input_path, parser_target: parser_target,
+        max_depth: max_depth, result: file_result)
+      if ast.nil?
+        # A failed parse carries its diagnosis in file_result; a nil AST from a clean parse is a
+        # comments-only file, which parsed fine but produces no JSON (counted as parsed-empty).
+        record_failure(state, file_path, relative_input_path, file_result[:parse_error]) if file_result[:outcome] == :failed
+        count_state(state, :parsed) unless file_result[:outcome] == :failed
+        return
+      end
 
       output_path = File.join(output_dir, "#{relative_path}.json")
 
       File.write(output_path, serialize(ast, max_depth))
+      count_state(state, :parsed)
+      count_state(state, :truncated_files) if ast[:truncated_nodes] > 0
     rescue *PER_FILE_ERRORS => e
       RubyAstGen::Logger.info "'#{relative_input_path}' - #{describe_error(e)}"
+      # Not a syntax error but the file still produced nothing: report it with the error class as
+      # the reason, since there is no parser diagnostic to point at.
+      record_failure(state, file_path, relative_input_path,
+        {message: describe_error(e), line: nil, column: nil, diagnostic_reason: e.class.to_s})
     end
   end
 
@@ -223,7 +271,7 @@ module RubyAstGen
   end
 
   def self.process_directory(dir_path, output_dir, exclude_regex, max_threads = CLI::DEFAULT_THREADS,
-    parser_target: nil, max_depth: NodeHandling::MAX_NESTING_DEPTH)
+    parser_target: nil, max_depth: NodeHandling::MAX_NESTING_DEPTH, state: nil)
     threads = []
     queue = Queue.new
 
@@ -232,10 +280,20 @@ module RubyAstGen
     # tool caches — a repo with `bundle config path .bundle` would otherwise hand us every
     # vendored gem, which the default exclusion regex does not cover.
     Dir.glob("#{dir_path}/**/*", File::FNM_DOTMATCH).each do |path|
-      next unless File.file?(path) && ruby_file?(path)
+      next unless File.file?(path)
       relative_dir = path.sub("#{dir_path}/", '')
-      next if skipped_directory?(relative_dir)
-      next if exclude_regex.match?(relative_dir)
+      if skipped_directory?(relative_dir)
+        count_state(state, :excluded)
+        next
+      end
+      unless ruby_file?(path)
+        count_state(state, :skipped_nonruby)
+        next
+      end
+      if exclude_regex.match?(relative_dir)
+        count_state(state, :excluded)
+        next
+      end
 
       queue << path
     end
@@ -252,7 +310,7 @@ module RubyAstGen
             FileUtils.mkdir_p(output_subdir)
 
             process_file(path, output_subdir, exclude_regex, dir_path, parser_target: parser_target,
-              max_depth: max_depth)
+              max_depth: max_depth, state: state)
           rescue *PER_FILE_ERRORS => e
             # Raised here rather than inside process_file's own rescue, this would kill the worker
             # and silently abandon the rest of its queue — join does not re-raise (plan 03 §7).
@@ -263,6 +321,66 @@ module RubyAstGen
     end
 
     threads.each(&:join)
+  end
+
+  # All state mutations from worker threads funnel through here (and .record_failure), guarded by
+  # the run's mutex.
+  def self.count_state(state, key)
+    return unless state
+
+    state[:mutex].synchronize { state[key] += 1 }
+  end
+
+  def self.record_failure(state, file_path, relative_input_path, parse_error)
+    return unless state
+
+    state[:mutex].synchronize do
+      state[:failed] += 1
+      state[:parse_errors] << {file_path: file_path, rel_file_path: relative_input_path,
+        parse_error: parse_error}
+    end
+  end
+
+  # The run manifest (plan 03 §4): one JSON object naming what this run saw and what it did, so a
+  # consumer can tell "parsed nothing" apart from "was never run".
+  def self.manifest_for(input_path, output_dir, state, threads:, max_depth:, parser_target:)
+    {
+      input: input_path,
+      output: output_dir,
+      ruby_version: RUBY_VERSION,
+      # The *selected* backend, so --parser-target is reflected here rather than the newest
+      # grammar available. A file whose retry swapped the grammar records its own backend in its
+      # own JSON; this key describes the run's configuration.
+      parser_backend: parser_for_current_ruby(log: false, parser_target: parser_target).to_s,
+      generator_version: VERSION,
+      generated_at: Time.now.utc.iso8601,
+      files_parsed: state[:parsed],
+      files_failed: state[:failed],
+      files_skipped_nonruby: state[:skipped_nonruby],
+      files_excluded: state[:excluded],
+      truncated_files: state[:truncated_files],
+      threads: threads,
+      max_depth: max_depth,
+      parser_target: parser_target&.to_s
+    }
+  end
+
+  # Writes the two side-records into the output directory: the per-failure diagnostics JSONL (only
+  # when at least one file failed — a stale file from a previous run into the same directory is
+  # removed, so the record always describes *this* run) and the manifest. A write failure here is
+  # logged and otherwise ignored: the AST output is already on disk, and losing the summary must
+  # not turn a finished run into a failed one. PER_FILE_ERRORS rather than StandardError because
+  # serialization here runs out of stack the same way per-file serialization can.
+  def self.write_run_records(output_dir, state, manifest)
+    diagnostics_path = File.join(output_dir, DIAGNOSTICS_FILENAME)
+    if state[:parse_errors].any?
+      File.write(diagnostics_path, state[:parse_errors].map { |record| JSON.generate(record) }.join("\n") + "\n")
+    elsif File.exist?(diagnostics_path)
+      File.delete(diagnostics_path)
+    end
+    File.write(File.join(output_dir, MANIFEST_FILENAME), JSON.generate(manifest) + "\n")
+  rescue *PER_FILE_ERRORS => e
+    Logger.error "Failed to write #{DIAGNOSTICS_FILENAME}/#{MANIFEST_FILENAME}: #{describe_error(e)}"
   end
 
   PARSER_CACHE_MUTEX = Mutex.new
@@ -429,11 +547,24 @@ module RubyAstGen
     ::Prism::Translation.constants.grep(/\AParser\d+\z/).map(&:to_s).sort
   end
 
-  def self.parse_file(file_path, relative_input_path, parser_target: nil, max_depth: NodeHandling::MAX_NESTING_DEPTH)
+  # Parses one file into the JSON hash to emit. +result+, when given, receives the per-file
+  # outcome for the run manifest: :parsed (JSON emitted), :empty (clean parse of a comments-only
+  # file, which produces no JSON but did not fail) or :failed (+parse_error+ carrying the
+  # diagnosis that lands in the diagnostics JSONL).
+  def self.parse_file(file_path, relative_input_path, parser_target: nil, max_depth: NodeHandling::MAX_NESTING_DEPTH,
+    result: nil)
     parser_class = parser_for_current_ruby(parser_target: parser_target)
     buffer, source_scrubbed = read_source_buffer(file_path)
-    ast, comments, parser_class = parse_with_retry(parser_class, buffer, file_path)
-    return unless ast
+    ast, comments, parser_class, diagnostics, syntax_error = parse_with_retry(parser_class, buffer, file_path)
+    if syntax_error
+      result&.merge!(outcome: :failed, parse_error: parse_error_record(syntax_error))
+      return nil
+    end
+    unless ast
+      result&.merge!(outcome: :empty)
+      return nil
+    end
+    result&.merge!(outcome: :parsed)
 
     # The truncation count is per-file state threaded through the traversal: module state would
     # race across the 10 worker threads and misattribute truncations between files.
@@ -452,6 +583,13 @@ module RubyAstGen
     json_ast[:ruby_version] = RUBY_VERSION
     json_ast[:truncated_nodes] = state[:truncated]
     json_ast[:encoding_scrubbed] = true if source_scrubbed || payloads_scrubbed
+    # Prism's error-tolerant warnings as data (plan 03 §3). The key is omitted when the parse was
+    # silent, like call_operator and heredoc — absence means "nothing to report".
+    records, truncated = diagnostics_records(diagnostics)
+    if records.any?
+      json_ast[:diagnostics] = records
+      json_ast[:diagnostics_truncated] = true if truncated
+    end
     if state[:truncated] > 0
       # One warning per file: the count and the node types live in the JSON, so a line per
       # truncated node is noise.
@@ -581,30 +719,78 @@ module RubyAstGen
     [string.encode(Encoding::UTF_8, invalid: :replace, undef: :replace), true]
   end
 
-  # Returns the parsed AST, the raw comment list, and the parser that produced them, so callers
-  # can record the effective backend and derive magic comments from the parse that actually
-  # succeeded — the retry may have swapped the grammar after a syntax error. Comments are
-  # collected in the same lexing pass as the AST (parse_with_comments), so there is no second
-  # parse; `Prism::Translation::Parser` implements the same method as the parser gem, which
-  # keeps the extraction below backend-independent.
+  # Returns the parsed AST, the raw comment list, the parser that produced them, that parse's
+  # non-fatal diagnostics, and the syntax error when the file could not be parsed — so callers
+  # can record the effective backend, derive magic comments from the parse that actually
+  # succeeded, and report failures as data. Comments are collected in the same lexing pass as
+  # the AST (parse_with_comments), so there is no second parse.
+  #
+  # Each attempt parses with a fresh parser (see .instantiate_parser) and its own diagnostics
+  # sink: the retry's warnings must not be mixed with the failed grammar's view of the file, so
+  # only the attempt that produced the returned AST contributes.
   def self.parse_with_retry(parser_class, buffer, file_path)
-    ast, comments = parser_class.default_parser.parse_with_comments(buffer)
-    [ast, comments, parser_class]
+    parser = instantiate_parser(parser_class, diagnostics = [])
+    ast, comments = parser.parse_with_comments(buffer)
+    [ast, comments, parser_class, diagnostics, nil]
   rescue ::Parser::SyntaxError => e
     retry_class = syntax_retry_parser(parser_class)
     if retry_class.nil?
       RubyAstGen::Logger.info "Failed to parse #{file_path}: #{e.message}"
-      return [nil, [], parser_class]
+      return [nil, [], parser_class, [], e]
     end
 
     RubyAstGen::Logger.info "Retrying #{file_path} with #{retry_class} after: #{e.message.lines.first&.strip}"
     begin
-      ast, comments = retry_class.default_parser.parse_with_comments(buffer)
-      [ast, comments, retry_class]
+      parser = instantiate_parser(retry_class, diagnostics = [])
+      ast, comments = parser.parse_with_comments(buffer)
+      [ast, comments, retry_class, diagnostics, nil]
     rescue ::Parser::SyntaxError => retry_error
       RubyAstGen::Logger.info "Failed to parse #{file_path}: #{retry_error.message}"
-      [nil, [], retry_class]
+      [nil, [], retry_class, [], retry_error]
     end
+  end
+
+  # A fresh parser per parse call, with warnings routed into +sink+ instead of dropped. The
+  # memoized default_parser is shared by the worker threads, so installing a per-file consumer
+  # there would race one file's warnings into another's report. Error behaviour is unchanged:
+  # all_errors_are_fatal is what default_parser configures too. ignore_warnings=false is the one
+  # deliberate divergence — collecting warnings is the point (plan 03 §3).
+  def self.instantiate_parser(parser_class, sink)
+    parser = parser_class.new
+    parser.diagnostics.all_errors_are_fatal = true
+    parser.diagnostics.ignore_warnings = false
+    parser.diagnostics.consumer = ->(diagnostic) { sink << diagnostic }
+    parser
+  end
+
+  # The syntax error as data for the diagnostics JSONL: the rendered message, where it sits in
+  # the file, and the parser's own reason symbol ("unexpected_token").
+  def self.parse_error_record(error)
+    diagnostic = error.diagnostic
+    location = diagnostic.location
+    {
+      message: diagnostic.message,
+      line: location.line,
+      column: location.column,
+      diagnostic_reason: diagnostic.reason.to_s
+    }
+  rescue NoMethodError
+    # A SyntaxError without a diagnostic is not something the parser gem emits; degrade to the
+    # message rather than losing the failure.
+    {message: describe_error(error), line: nil, column: nil, diagnostic_reason: nil}
+  end
+
+  # Non-fatal diagnostics (prism warnings: ambiguous argument prefix, unused variable, ...) as
+  # data, capped at DIAGNOSTICS_CAP entries. The second return value reports whether the cap cut
+  # anything, so the file can carry diagnostics_truncated.
+  def self.diagnostics_records(diagnostics)
+    records = diagnostics.filter_map do |diagnostic|
+      location = diagnostic.location
+      {severity: diagnostic.level.to_s, message: diagnostic.message,
+        line: location&.line, column: location&.column}
+    end
+    truncated = records.size > DIAGNOSTICS_CAP
+    [truncated ? records.first(DIAGNOSTICS_CAP) : records, truncated]
   end
 
   # Magic comments ("# key: value" comments) reported as data, in source order. The rule runs

@@ -39,6 +39,7 @@ usage: ruby_ast_gen [options]
                              of the newest available
         --max-depth <n>      Maximum AST depth before truncation (default: 250)
         --threads <n>        Worker threads for a directory run (default: 10)
+        --fail-on-error      Exit non-zero when any input file failed to parse
         --parser-info        Print parser/runtime capability information
         --version            Print the version
         --help               Print usage
@@ -51,6 +52,9 @@ does an option whose value is missing. Only usage errors exit non-zero: a missin
 path that is neither a file nor a directory, an unusable `--exclude` regex, or an invalid
 `--parser-target`. Problems with individual files are
 reported and skipped, never fatal — the consumer treats a non-zero exit as "no files parsed at all".
+`--fail-on-error` is the only way to opt in to a non-zero exit for per-file failures: CI callers
+who would rather fail than analyse a partial corpus can pass it, and the exit status is then 1
+when at least one input file failed to parse.
 
 To inspect which parser backend will be used in the current runtime, run:
 
@@ -145,11 +149,76 @@ Send and safe-navigation nodes carry explicit call syntax facts, so consumers do
 guess from the whitespace-normalized `code` snippet: `call_operator` (`"."`, `"::"`, or `"&."`)
 when the call has an explicit operator, and `has_parentheses: true` when it was written with
 parentheses. Percent-notation arrays carry `percent_array` (`"%w"`, `"%i"`, `"%W"`, `"%I"`,
-whatever the delimiter), and heredoc strings carry `heredoc: true` plus
+whatever the delimiter), regexp options carry `options` (`["i", "m", "x"]` for `/x/imx` — the
+older `value` key holds only the first flag and is kept for compatibility), and heredoc strings
+carry `heredoc: true` plus
 `heredoc_body_start`/`heredoc_body_end` character offsets — `meta_data.code` still covers only
 the `<<~SQL` marker, so those offsets are the only way to reach the body text. All of these keys
 are emitted only when the fact holds (the plain form stays key-less), and both parser backends
 emit identical values.
+
+A `def`/`defs` node whose immediately preceding statement in the same body list is a Sorbet
+`sig` block carries `has_sig: true`, so a consumer can read the `params`/`returns` types without
+stitching adjacent statements by position. Every form Sorbet accepts counts: `sig { ... }`,
+`sig(:final) { ... }`, a trailing send chain such as `sig { ... }.checked(:never)`, and
+`T::Sig::WithoutRuntime.sig { ... }`. A `sig` block on any other receiver (`helper.sig { ... }`)
+is treated as an unrelated DSL. A method without a preceding sig carries no `has_sig` key at all,
+and `.rbi` files need no special handling — their defs pass through as usual.
+
+## Diagnostics and run manifest
+
+Every run writes two side-records **inside** the output directory, and both deliberately end in
+`.jsonl`, never `.json`: consumers (chen in particular) read every `*.json` file under the
+output directory as an AST, so a `.json` side-record would be misread and silently miscount a
+run.
+
+`ruby_ast_gen_diagnostics.jsonl` is written when at least one input file failed to parse, with
+one JSON object per line:
+
+```json
+{
+  "file_path": "/app/lib/broken.rb",
+  "rel_file_path": "lib/broken.rb",
+  "parse_error": {
+    "message": "unexpected end-of-input",
+    "line": 1,
+    "column": 8,
+    "diagnostic_reason": "def_params_term_paren"
+  }
+}
+```
+
+A file that failed under the selected grammar but parsed after the newest-grammar retry is not
+a failure. When a run has no failures, no diagnostics file is written, and a stale one left in
+the output directory by an earlier run is removed, so the record always describes the run that
+produced it.
+
+Files that parsed _with_ warnings carry a top-level `diagnostics` array of
+`{"severity", "message", "line", "column"}` entries. The array holds at most 50 entries, and
+`diagnostics_truncated: true` alongside it marks a longer report as cut. The key is omitted
+entirely when the parse was silent. The warnings are the parser's error-tolerant diagnostics
+(ambiguous argument prefix, unused variable, useless void context), so their set can differ
+between the two backends; `parser_backend` says which one produced them.
+
+Because diagnostics are now collected as data, the parser's rendered error (the source line with
+a caret under the offending column) is no longer printed to stderr: the message and its location
+are on stdout as an `[INFO]` line and in the diagnostics record. A run that only hit parse
+failures therefore writes nothing to stderr.
+
+`ruby_ast_gen_manifest.jsonl` is written at the end of every run — a single JSON object naming
+what the run saw and did: `input`, `output`, `ruby_version`, `parser_backend`,
+`generator_version`, `generated_at`, `files_parsed`, `files_failed`, `files_skipped_nonruby`,
+`files_excluded`, `truncated_files`, `threads`, `max_depth`, and `parser_target` (null unless
+`--parser-target` was given). `parser_backend` is the backend the run selected, so it honours
+`--parser-target` — an individual file whose retry swapped the grammar records its own backend in
+its own JSON. `files_parsed` counts files that parsed, including empty or comments-only files,
+which parse to nothing and emit no JSON but did not fail; `truncated_files` counts parsed files
+whose output was cut by the depth cap. The two skip counters cover everything the scan walked
+past: `files_skipped_nonruby` counts files whose name is not recognized as Ruby, and
+`files_excluded` counts paths dropped by the exclusion regex _or_ by the fixed tool-directory
+list, so a repository with a `.git` directory reports every file in it as excluded. The manifest is written even when a
+run parsed nothing, so a consumer can tell "this input has no Ruby" apart from "the generator
+never ran".
 
 ## Development
 
@@ -187,6 +256,11 @@ which a working branch needs because the frontend usually runs inside another pr
 RBASTGEN_PATH=/path/to/rbastgen        # environment variable
 sbt -Drbastgen.path=/path/to/rbastgen  # or system property
 ```
+
+Prefer the environment variable when a suite forks its test JVM: atom's does, so
+`-Drbastgen.path` set on the sbt launcher never reaches the tests and
+`RubyAtomWorkflowTests` cancels itself with "rbastgen 'rbastgen' reports 1.3.0" — the PATH wrapper
+it fell back to.
 
 A standalone executable of this repo is a two-line script, since `exe/ruby_ast_gen` needs the
 bundle:

@@ -44,6 +44,8 @@ module RubyAstGen
       Flag.new(long: "--threads", kind: :value, key: :threads, placeholder: "<n>",
                description: "Worker threads for a directory run " \
                             "(default: #{DEFAULT_THREADS})"),
+      Flag.new(long: "--fail-on-error", kind: :boolean, key: :fail_on_error,
+               description: "Exit non-zero when any input file failed to parse"),
       Flag.new(long: "--parser-info", kind: :mode, key: :parser_info,
                description: "Print parser/runtime capability information"),
       Flag.new(long: "--version", kind: :mode, key: :version,
@@ -62,7 +64,8 @@ module RubyAstGen
       log_level: nil,
       parser_target: nil,
       max_depth: nil,
-      threads: nil
+      threads: nil,
+      fail_on_error: false
     }.freeze
 
     # Warnings are collected rather than printed so the caller can configure the log level
