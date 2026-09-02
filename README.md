@@ -91,6 +91,11 @@ given in any order:
 exe/ruby_ast_gen --parser-info --parser-target 3.2
 ```
 
+The `parser`/`prism` versions in that report come from the loaded libraries themselves rather than
+from RubyGems' specs, so a `--standalone` bundle — how atom-parsetools ships this tool — reports the
+versions it is parsing with instead of `unavailable`. Those lines read `unavailable` only when the
+library really is not loaded.
+
 Note that the two backends disagree on Ruby 3.4's `it` block parameter: the prism translation
 emits an `itblock` node (`call`, `param: "it"`, `body`) whose body references `lvar(:it)`, while
 the `parser` gem grammars parse `it` as a plain method call (`send(nil, :it)`). Consumers should

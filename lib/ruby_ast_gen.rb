@@ -467,6 +467,19 @@ module RubyAstGen
     Gem::Version.new("#{match[1]}.#{match[2]}")
   end
 
+  # `Gem.loaded_specs` is empty when the libraries come from a `--standalone` bundle instead of
+  # being activated through RubyGems — which is how atom-parsetools ships this tool, so
+  # `--parser-info` used to report "unavailable" for the very gem it was parsing with. The loaded
+  # library's own VERSION constant is the fallback; nil (reported as "unavailable") now means the
+  # library really is not loaded.
+  def self.library_version(gem_name, version_constant)
+    spec_version = Gem.loaded_specs[gem_name]&.version&.to_s
+    return spec_version if spec_version
+    return nil unless Object.const_defined?(version_constant)
+
+    Object.const_get(version_constant).to_s
+  end
+
   def self.parser_info(parser_target: nil)
     parser = parser_for_current_ruby(log: false, parser_target: parser_target)
 
@@ -477,8 +490,8 @@ module RubyAstGen
       parser_target: parser_target&.to_s,
       parser_backend: parser.to_s,
       grammar_version: parser_grammar_version(parser).to_s,
-      parser_gem_version: Gem.loaded_specs["parser"]&.version&.to_s,
-      prism_gem_version: Gem.loaded_specs["prism"]&.version&.to_s,
+      parser_gem_version: library_version("parser", "Parser::VERSION"),
+      prism_gem_version: library_version("prism", "Prism::VERSION"),
       prism_translation_parsers: prism_translation_parser_names
     }
   end
