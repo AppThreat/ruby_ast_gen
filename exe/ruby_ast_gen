@@ -33,9 +33,15 @@ end
 
 # Usage errors are the only fatal cases: everything a run encounters per file is reported and
 # skipped instead, because a non-zero exit costs the caller every file (see the comment in
-# RubyAstGen::CLI.parse).
+# RubyAstGen::CLI.parse). --fail-on-error is the sole opt-out, for CI callers who would rather
+# fail than analyse a partial corpus; chen never passes it.
 begin
-  RubyAstGen.parse(options)
+  summary = RubyAstGen.parse(options)
+  if options[:fail_on_error] && summary[:files_failed] > 0
+    RubyAstGen::Logger.error "#{summary[:files_failed]} file(s) failed to parse; details in " \
+      "#{File.join(options[:output].to_s, RubyAstGen::DIAGNOSTICS_FILENAME)}"
+    exit 1
+  end
 rescue ArgumentError => e
   RubyAstGen::Logger.error e.message
   exit 1

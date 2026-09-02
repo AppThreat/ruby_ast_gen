@@ -35,7 +35,9 @@ RSpec.describe "file discovery and worker mechanics" do
 
         Dir.mktmpdir do |out_dir|
           RubyAstGen.parse(input: path, output: out_dir, exclude: "^skip_me")
-          expect(Dir.children(out_dir)).to be_empty
+          # The manifest is written on every run (plan 03 §4); the excluded file itself must
+          # produce no AST output.
+          expect(Dir.glob("#{out_dir}/**/*.json")).to be_empty
         end
       end
     end

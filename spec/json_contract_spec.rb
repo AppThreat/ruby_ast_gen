@@ -472,6 +472,85 @@ RSpec.describe "JSON shape contracts" do
     end
   end
 
+  describe "Sorbet sig attachment (plan 02 §3)" do
+    SORBET_FIXTURE = File.expand_path("fixtures/syntax/sorbet.rb", __dir__)
+
+    def all_defs(ast)
+      flatten_nodes(ast).select { |node| %w[def defs].include?(node[:type]) }
+    end
+
+    it "marks defs preceded by a sig block and leaves the negative case key-less" do
+      ast = parse_source(File.read(SORBET_FIXTURE))
+
+      marked = all_defs(ast).select { |node| node.key?(:has_sig) }
+      # format, the abstract validate, ==, Audit#heading and the singleton Reporter.log!
+      expect(marked.map { |node| [node[:type], node[:name]] }).to contain_exactly(
+        ["def", :format],
+        ["def", :validate],
+        ["def", :==],
+        ["def", :heading],
+        ["defs", :log!]
+      )
+      marked.each do |node|
+        expect(node[:has_sig]).to be(true)
+        expect_metadata_shape(node)
+      end
+
+      # The negative case: a def whose preceding statement is not a sig block carries no
+      # has_sig key at all — the fact key is emitted only when it holds.
+      plain = all_defs(ast).find { |node| node[:name] == :without_sig }
+      expect(plain).not_to be_nil
+      expect(plain).not_to have_key(:has_sig)
+    end
+
+    it "marks the sig forms real Sorbet code uses" do
+      # `.checked(...)`/`.on_failure(...)` wrap the sig block in a send chain, and
+      # T::Sig::WithoutRuntime.sig gives it a constant receiver. Both are signatures.
+      ast = parse_source(<<~RUBY)
+        class Widget
+          extend T::Sig
+
+          sig { void }.checked(:never)
+          def chained; end
+
+          sig(:final) { returns(String) }
+          def final_form; "x"; end
+
+          T::Sig::WithoutRuntime.sig { void }
+          def without_runtime; end
+
+          helper.sig { void }
+          def not_a_sig; end
+        end
+      RUBY
+
+      marked = all_defs(ast).select { |node| node.key?(:has_sig) }.map { |node| node[:name] }
+      expect(marked).to contain_exactly(:chained, :final_form, :without_runtime)
+
+      # A `sig` block on some other receiver is another DSL, not a signature.
+      expect(all_defs(ast).find { |node| node[:name] == :not_a_sig }).not_to have_key(:has_sig)
+    end
+
+    it "does not treat a non-sig preceding statement or a sig on a send as an attachment" do
+      ast = parse_source(<<~RUBY)
+        class Widget
+          extend T::Sig
+
+          validate_registration
+          def misplaced; end
+
+          sig { void }
+          attr_reader :label
+        end
+      RUBY
+
+      misplaced = flatten_nodes(ast).find { |node| node[:type] == "def" && node[:name] == :misplaced }
+      expect(misplaced).not_to have_key(:has_sig)
+      # The sig block precedes a send (attr_reader), not a def: nothing is marked anywhere.
+      all_defs(ast).each { |node| expect(node).not_to have_key(:has_sig) }
+    end
+  end
+
   it "emits blocknilarg as an anonymous parameter once a grammar accepts `def foo(&nil)`" do
     source = "def foo(&nil)\nend\n"
     unless SpecCapabilities.grammar_accepts?(source)

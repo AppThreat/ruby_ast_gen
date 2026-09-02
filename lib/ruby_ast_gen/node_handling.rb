@@ -165,24 +165,83 @@ module NodeHandling
       return {type: node.type.to_s, meta_data: meta_data, nested: true, truncated: true}
     end
 
+    json_children = node.children.map do |child|
+      if child.is_a?(Parser::AST::Node)
+        ast_to_json(child, code, current_depth: current_depth + 1, file_path: file_path,
+          max_depth: max_depth, state: state) # Recursively process child nodes
+      else
+        child # If it's not a node (e.g., literal), return as-is
+      end
+    end
     base_hash = {
       type: node.type.to_s, # Node type (e.g., :send, :def, etc.)
       meta_data: meta_data,
-      children: node.children.map do |child|
-        if child.is_a?(Parser::AST::Node)
-          ast_to_json(child, code, current_depth: current_depth + 1, file_path: file_path,
-            max_depth: max_depth, state: state) # Recursively process child nodes
-        else
-          child # If it's not a node (e.g., literal), return as-is
-        end
-      end
+      children: json_children
     }
     add_node_properties(node.type, base_hash, file_path)
     # Truncated nodes keep their documented {type, meta_data, nested, truncated} shape, which is
     # why this happens after the truncation return above.
     metadata = syntax_metadata(node.type, loc)
     base_hash.merge!(metadata) unless metadata.empty?
+    # Statement lists live at every level (file root, class/module bodies, method bodies), and a
+    # `sig` block attaches to the def that follows it in the same list, so the check runs on
+    # every node's children (plan 02 §3).
+    mark_sig_attachments(node, json_children)
     base_hash
+  end
+
+  # Marks `has_sig: true` on a def/defs whose immediately preceding sibling in the same
+  # statement list is a Sorbet `sig` block (`sig { params(...).returns(...) }` parses as a block
+  # on `send nil, :sig`). The consumer otherwise has to stitch the two statements by position.
+  # Like the other syntax facts, the key is emitted only when the fact holds.
+  def self.mark_sig_attachments(parent_node, json_children)
+    raw_children = parent_node.children
+    return unless raw_children.is_a?(Array)
+
+    json_children.each_with_index do |json_child, index|
+      next if index.zero?
+      next unless sig_block?(raw_children[index - 1])
+      next unless json_child.is_a?(Hash) && !json_child[:truncated] && %w[def defs].include?(json_child[:type])
+
+      json_child[:has_sig] = true
+    end
+  end
+
+  # True for every statement Sorbet accepts as a signature, all of which are a `sig` block
+  # somewhere underneath:
+  #
+  #   sig { void }                          block on `send nil, :sig`
+  #   sig(:final) { void }                  arguments are irrelevant
+  #   sig { void }.checked(:never)          the block is the receiver of a trailing send chain
+  #   T::Sig::WithoutRuntime.sig { void }   sig called on a constant path
+  #
+  # The trailing-send and constant-receiver forms are the reason this is not a single shape test:
+  # missing them marks a real signature as absent, and a consumer reading has_sig as authoritative
+  # (chen does) would type those methods as untyped.
+  def self.sig_block?(node)
+    return false unless node.is_a?(Parser::AST::Node)
+
+    case node.type
+    when :block then sig_call?(node.children[0])
+    when :send then sig_block?(node.children[0]) # `.checked(:never)` and friends
+    else false
+    end
+  end
+
+  def self.sig_call?(node)
+    node.is_a?(Parser::AST::Node) &&
+      node.type == :send &&
+      node.children[1] == :sig &&
+      sig_receiver?(node.children[0])
+  end
+
+  # No receiver (`extend T::Sig`), or a constant path such as T::Sig::WithoutRuntime. Anything
+  # else — `helper.sig { }` — is some other DSL, not a signature.
+  def self.sig_receiver?(receiver)
+    return true if receiver.nil?
+
+    receiver.is_a?(Parser::AST::Node) && receiver.type == :const &&
+      (receiver.children[0].nil? || sig_receiver?(receiver.children[0]))
   end
 
   def self.trim_string(string)
