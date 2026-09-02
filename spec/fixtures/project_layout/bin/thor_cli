@@ -1,0 +1,12 @@
+#!/usr/bin/env ruby
+
+require "thor"
+
+module Sample
+  class Cli < Thor
+    desc "hello NAME", "Say hello"
+    def hello(name)
+      puts "hello #{name}"
+    end
+  end
+end

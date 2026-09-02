@@ -10,28 +10,58 @@ on:
 
 jobs:
   test:
+    name: ${{ matrix.ruby }} on ${{ matrix.os }}
     env:
       BUNDLE_JOBS: 4
       BUNDLE_RETRY: 3
       CI: true
       TRUFFLERUBYOPT: "--engine.Mode=latency"
+    # The matrix is spelled out rather than crossed, because the two axes carry different risk.
+    # Parsing is independent of the running VM (the grammar is chosen by capability), so what a
+    # Ruby version actually exercises here is its *runtime*: gem availability, stack depth,
+    # encoding handling. That is worth testing per implementation, on one OS. The OS axis only
+    # affects path handling (globbing, separators, dotfiles) and file encodings, so it is sampled
+    # on the current releases instead of being multiplied by every runtime.
     strategy:
       fail-fast: false
       matrix:
-        ruby: ["3.1.7", "3.2.11", "3.3.11", "3.4.9", "4.0.5", "jruby-9.4", "jruby-10.0", "jruby-10.1", "jruby-head", "truffleruby-24.0", "truffleruby-25.0", "truffleruby-33.0", "truffleruby-34.0"]
-        os: ['ubuntu-22.04', 'ubuntu-24.04', 'windows-latest', 'ubuntu-22.04-arm', 'ubuntu-24.04-arm', 'macos-15', 'macos-26']
-        exclude:
-          - os: macos-26
-            ruby: truffleruby-24.0
-          - os: windows-latest
-            ruby: truffleruby-24.0
-          - os: windows-latest
-            ruby: truffleruby-25.0
-          - os: windows-latest
-            ruby: truffleruby-33.0
-          - os: windows-latest
-            ruby: truffleruby-34.0
+        include:
+          # Every supported runtime, on Linux. CRuby entries are the current stable patch of each
+          # line; 3.1 is the floor declared by the gemspec (`required_ruby_version >= 3.1.4`) and
+          # the language level jruby-9.4 implements, so it stays until that floor moves.
+          - { os: ubuntu-24.04, ruby: "3.1.7" }
+          - { os: ubuntu-24.04, ruby: "3.2.11" }
+          - { os: ubuntu-24.04, ruby: "3.3.12" }
+          - { os: ubuntu-24.04, ruby: "3.4.10" }
+          - { os: ubuntu-24.04, ruby: "4.0.6" }
+          # Alternative implementations: the short version selects the newest patch of the line.
+          # JRuby matters most - the released gem is packaged for it.
+          - { os: ubuntu-24.04, ruby: "jruby-9.4" }
+          - { os: ubuntu-24.04, ruby: "jruby-10.0" }
+          - { os: ubuntu-24.04, ruby: "jruby-10.1" }
+          - { os: ubuntu-24.04, ruby: "truffleruby-33.0" }
+          - { os: ubuntu-24.04, ruby: "truffleruby-34.0" }
+
+          # OS coverage on the current stable releases. Windows is the interesting one: path
+          # separators and dotfile globbing are where directory discovery differs.
+          - { os: windows-latest, ruby: "3.4.10" }
+          - { os: windows-latest, ruby: "4.0.6" }
+          - { os: macos-26, ruby: "3.4.10" }
+          - { os: macos-26, ruby: "4.0.6" }
+          - { os: macos-26, ruby: "jruby-10.1" }
+          - { os: ubuntu-24.04-arm, ruby: "3.4.10" }
+          - { os: ubuntu-24.04-arm, ruby: "4.0.6" }
+          # An older distribution, kept on the oldest supported runtime, so the pair that is most
+          # likely to break packaging is exercised together.
+          - { os: ubuntu-22.04, ruby: "3.1.7" }
+
+          # Nightlies report but never block a merge.
+          - { os: ubuntu-24.04, ruby: "head", experimental: true }
+          - { os: ubuntu-24.04, ruby: "jruby-head", experimental: true }
+          - { os: ubuntu-24.04, ruby: "truffleruby-head", experimental: true }
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
