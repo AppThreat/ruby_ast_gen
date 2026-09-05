@@ -7,6 +7,27 @@ backwards-compatible AST formats.
 
 ## Usage
 
+### Standalone binary (no Ruby required)
+
+Each [release](https://github.com/AppThreat/ruby_ast_gen/releases) attaches a
+single self-contained executable per platform:
+`ruby_ast_gen-<version>-<platform>`, where `<platform>` is one of
+`linux-gnu-x86_64`, `linux-gnu-arm64`, `linux-musl-x86_64`, `linux-musl-arm64`,
+`macos-arm64` or `macos-x86_64`. Windows is not available yet
+([tebako#486](https://github.com/tamatebako/tebako/issues/486)).
+
+```bash
+curl -LO https://github.com/AppThreat/ruby_ast_gen/releases/latest/download/ruby_ast_gen-2.1.0-linux-gnu-x86_64
+chmod +x ruby_ast_gen-2.1.0-linux-gnu-x86_64
+./ruby_ast_gen-2.1.0-linux-gnu-x86_64 -i . -o .ast
+```
+
+Verify downloads against the release's `SHA256SUMS`. macOS binaries are not
+notarized, so the first launch needs Gatekeeper approval
+(`xattr -d com.apple.quarantine <binary>`).
+
+### JRuby
+
 The release uses JRuby to enable an effective standalone version. Using `jruby`, one can run
 
 ```
@@ -239,6 +260,24 @@ cross-repo contract with the chen `ruby2atom` frontend — keep changes additive
 `spec/json_contract_spec.rb`.
 
 To install this gem onto your local machine, run `bundle exec rake install`. To package, run `rake build`.
+
+### Building the standalone executables
+
+`build/sea.sh` (Linux/macOS) and `build/sea.ps1` (Windows) press the current
+checkout into a self-contained executable for the machine you run them on,
+smoke-test it and write a `.sha256` beside it — the same scripts the release
+workflow runs per platform. Ruby is not needed on the build machine; curl,
+cmake and a C toolchain are (**clang** on Linux — tebako's runtime SDK embeds
+clang flags in `RbConfig` that gcc rejects).
+
+```bash
+./build/sea.sh                  # → dist/ruby_ast_gen-<version>-<platform>
+SEA_RUBY_VERSION=3.4.10 ./build/sea.sh
+```
+
+`SEA_UPX=1` attempts UPX compression on Linux and falls back automatically:
+UPX shifts the appended image slots tebako locates by offset, so the compressed
+binary fails verification today. Each script's header documents the rest.
 
 ### Testing a local build with chen / atom
 
