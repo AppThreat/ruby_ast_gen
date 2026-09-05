@@ -1,0 +1,308 @@
+# Single-executable-application (SEA) release pipeline.
+#
+# Every tag push (v*) presses ruby_ast_gen into self-contained native binaries
+# with tebako <https://tebako.org> — the CRuby runtime, the gem set (parser +
+# prism with its native extension) and the application ride inside one file per
+# platform, so consumers download a binary and run it with no Ruby (and no
+# Java) installed. The JRuby-jar flow in the README remains; these binaries are
+# the distribution that needs nothing but the OS.
+#
+# Legs and why they are shaped this way:
+#   - linux-gnu:  pressed on the matching Ubuntu runner. The toolchain MUST be
+#     clang: tebako's runtime SDK embeds the compiler flags of its build farm
+#     (-fdeclspec, clang-18) in RbConfig, and gcc rejects them, so cc is
+#     repointed at clang before pressing.
+#   - linux-musl: pressed inside an alpine:3.21 container driven by docker run
+#     from a glibc host — node-based actions cannot run on musl (the same shape
+#     tebako's own release pipeline uses). The result runs on Alpine and any
+#     musl system; the gnu binaries run on glibc distros (verified down to
+#     Ubuntu 20.04 / glibc 2.31).
+#   - macos: arm64 on the current runner, x86_64 on macos-15-intel (the last
+#     Intel image GitHub ships, available until ~Aug 2027).
+#   - windows: ucrt64 (x64), EXPERIMENTAL and unpublished — blocked on
+#     tamatebako/tebako#486, a duplicate library alias between the runtime and
+#     payload images that breaks the press-time native-extension build and the
+#     boot of any package that presses. Independent of the pressed runtime. The
+#     leg runs on every tag and pull request but blocks nothing.
+#
+# UPX: attempted-but-not-shipped. tebako packages carry appended image slots
+# after the ELF container; UPX rewrites the ELF and shifts the slots, so the
+# compressed binary fails build/sea.sh's verification and the script falls back
+# to the uncompressed file. The opt-in input stays so a tebako release that
+# relocates its slots turns compression on without further changes here.
+#
+# Triggers: a tag publishes; workflow_dispatch and any pull request touching the
+# press machinery are build-only dry runs of the whole matrix (artifacts, no
+# release). Every leg is therefore proven buildable before a tag exists.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # A pull request that touches the press machinery builds the WHOLE matrix and
+  # runs each leg's smoke test. Deliberately not a cheaper single leg: the only
+  # thing that proves a platform's binary is buildable is building it, and the
+  # alternative is discovering a broken leg at tag time, when the release is
+  # already half-published. The path filter keeps this off ordinary PRs, so the
+  # cost lands only on changes that can actually break a press.
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "build/**"
+      - "sea/**"
+      - "exe/**"
+      - "Gemfile"
+      - ".github/workflows/release.yaml"
+  workflow_dispatch:
+    inputs:
+      sea_ruby:
+        description: "CRuby runtime pressed into the binaries"
+        required: false
+        default: "4.0.6"
+      upx:
+        description: "Attempt UPX compression on the linux-gnu binaries (falls back automatically)"
+        required: false
+        type: boolean
+        default: false
+
+# One run per ref: a re-pushed tag serializes behind its in-flight run instead
+# of racing the same release's asset set (uploads clobber).
+concurrency:
+  group: release-${{ github.ref_name }}
+  # A superseded pull-request press is dead work; a re-pushed tag must not
+  # race its own release's asset set.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SEA_RUBY_VERSION: ${{ github.event.inputs.sea_ruby || '4.0.6' }}
+  TEBAKO_VERSION: v2.1.8
+
+permissions:
+  contents: write
+
+jobs:
+  sea-linux-gnu:
+    name: SEA linux-gnu ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the press toolchain (clang — see the header comment)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang build-essential cmake upx-ucl curl ca-certificates file
+          # Repoint cc at clang and *verify*: if this silently failed, the
+          # press would die deep inside tebako with the -fdeclspec error the
+          # header comment warns about, from a much harder-to-read place.
+          sudo ln -sf "$(command -v clang)" /usr/local/bin/cc
+          cc --version | grep -qi clang || { echo "cc is not clang: $(command -v cc)" >&2; exit 1; }
+      - name: Press the executable
+        run: ./build/sea.sh
+        env:
+          SEA_UPX: ${{ github.event_name == 'workflow_dispatch' && inputs.upx && '1' || '0' }}
+      - name: Upload the binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sea-linux-gnu-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  sea-linux-musl:
+    name: SEA linux-musl ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The press runs in the container; the host only supplies docker. The
+      # image's own arch matches the runner, and the musl runtime pressed there
+      # is what alpine/musl users download. SEA_RUBY_VERSION/TEBAKO_VERSION
+      # are passed with -e because the workflow-level env: does not cross the
+      # container boundary — without them a dispatch's sea_ruby input would be
+      # silently ignored on this leg. The press itself runs as the host's
+      # uid/gid (apk as root, then su-exec): a root press leaves root-owned
+      # files in the checkout's dist/, which the runner user cannot clean up.
+      - name: Press the executable (alpine container)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e SEA_RUBY_VERSION -e TEBAKO_VERSION \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            alpine:3.21 sh -c '
+              set -e
+              apk add --no-cache -q curl ca-certificates build-base cmake clang file su-exec
+              ln -sf /usr/bin/clang /usr/bin/cc
+              cc --version | grep -q clang || { echo "cc is not clang" >&2; exit 1; }
+              mkdir -p /tmp/sea-home && chown "$HOST_UID:$HOST_GID" /tmp/sea-home
+              su-exec "$HOST_UID:$HOST_GID" env HOME=/tmp/sea-home ./build/sea.sh
+            '
+      - name: Upload the binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sea-linux-musl-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  sea-macos:
+    name: SEA macos ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, os: macos-26 }
+          - { arch: x86_64, os: macos-15-intel }
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the press toolchain
+        run: brew install cmake
+      - name: Press the executable
+        run: ./build/sea.sh
+      - name: Upload the binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sea-macos-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Experimental and deliberately non-blocking: blocked on tamatebako/tebako#486
+  # (duplicate libwinpthread-1.dll alias between the runtime and payload images
+  # on windows-ucrt64), which breaks both the press-time prism extension build
+  # and the boot of any package that does press. Reproduced here and locally
+  # across two ruby versions and two runtimes; the issue's 0.16.9 workaround is
+  # unavailable in the current registry. See build/sea.ps1's header for the
+  # full diagnosis.
+  # The job stays so the leg is exercised on every tag and turns back on by
+  # itself upstream; it is not in the release job's needs:, so no release waits
+  # on it, and sea.ps1's smoke tests are what gate whether an .exe is uploaded
+  # at all. Until it goes green there is no published Windows asset.
+  sea-windows:
+    name: SEA windows-ucrt64 (experimental)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up the ucrt64 toolchain (gem native extensions compile at press time)
+        # Pin a *release* commit, not one from the development branch: this
+        # action's default branch carries only sources (main.js, src/), and the
+        # bundled index.js its action.yml names exists solely on the commits the
+        # v2 tag moves across. A dev-branch SHA fails the run before any step of
+        # ours executes, with "File not found: ...\index.js".
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            make
+      - name: Press the executable
+        shell: pwsh
+        # sea.ps1 reads SEA_RUBY_VERSION/TEBAKO_VERSION from the workflow-level
+        # env:, so a dispatch's sea_ruby input reaches this leg like the others.
+        run: |
+          # msys2 does not touch the outer shell; hand the ucrt64 tools to the
+          # press, with a cc hardlink because mingw ships gcc but not cc.
+          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          cmd /c mklink /H C:\msys64\ucrt64\bin\cc.exe C:\msys64\ucrt64\bin\gcc.exe 2>$null
+          ./build/sea.ps1
+      - name: Upload the binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sea-windows-ucrt64
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish the GitHub release
+    # sea-windows is deliberately absent: it is experimental (see the job's
+    # comment) and must never hold up or fail a release.
+    needs: [sea-linux-gnu, sea-linux-musl, sea-macos]
+    # A dispatch is a build-only dry run; only a tag publishes.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Guard the tag against the gem version
+        run: |
+          VERSION=$(sed -n 's/.*VERSION = "\(.*\)".*/\1/p' lib/ruby_ast_gen/version.rb)
+          TAG="${GITHUB_REF_NAME}"
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "Tag $TAG does not match the gem version v$VERSION; refusing to publish mismatched binaries." >&2
+            exit 1
+          fi
+      - name: Collect the binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          # Only the six legs this release publishes; the experimental Windows
+          # artifact is never picked up, even on the run where it succeeds.
+          pattern: sea-{linux,macos}-*
+          path: dist
+          merge-multiple: true
+      - name: Check the asset set is complete
+        working-directory: dist
+        run: |
+          # A mistyped pattern above would otherwise publish an empty release.
+          count=$(ls ruby_ast_gen-*-* 2>/dev/null | grep -vc '\.sha256$' || true)
+          [ "$count" -eq 6 ] || {
+            echo "Expected 6 binaries, found $count:" >&2; ls -l >&2; exit 1;
+          }
+      - name: Assemble the checksum manifest
+        working-directory: dist
+        run: cat *.sha256 | sed 's/  .*\//  /' > SHA256SUMS
+      - name: Write the release notes
+        run: |
+          VERSION=$(sed -n 's/.*VERSION = "\(.*\)".*/\1/p' lib/ruby_ast_gen/version.rb)
+          mkdir -p /tmp/notes
+          {
+            echo "Self-contained single executables for \`ruby_ast_gen\` $GITHUB_REF_NAME — no Ruby (or Java) required on the machine that runs them."
+            echo
+            echo "Each binary embeds the CRuby runtime and the parser/prism gems, including prism's native extension. The parser backend is selected by grammar capability, exactly as in the gem: check any downloaded binary with \`./ruby_ast_gen-$VERSION-linux-gnu-x86_64 --parser-info\`."
+            echo
+            echo "| Asset | Runs on |"
+            echo "| --- | --- |"
+            echo "| \`ruby_ast_gen-$VERSION-linux-gnu-x86_64\` | x86_64 Linux, glibc (Ubuntu 20.04 and newer, Debian, RHEL) |"
+            echo "| \`ruby_ast_gen-$VERSION-linux-gnu-arm64\` | arm64 Linux, glibc |"
+            echo "| \`ruby_ast_gen-$VERSION-linux-musl-x86_64\` | x86_64 Alpine/musl and distroless-musl |"
+            echo "| \`ruby_ast_gen-$VERSION-linux-musl-arm64\` | arm64 Alpine/musl |"
+            echo "| \`ruby_ast_gen-$VERSION-macos-arm64\` | Apple Silicon macOS |"
+            echo "| \`ruby_ast_gen-$VERSION-macos-x86_64\` | Intel macOS |"
+            echo
+            echo "Windows is not published yet: tebako cannot build prism's native extension during a Windows press, and the packages that do press fail at boot on a duplicate library alias. Windows users should keep using the gem or the JRuby jar."
+            echo
+            echo '```bash'
+            echo "curl -LO https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/ruby_ast_gen-${VERSION}-linux-gnu-x86_64"
+            echo "chmod +x ruby_ast_gen-${VERSION}-linux-gnu-x86_64"
+            echo "./ruby_ast_gen-${VERSION}-linux-gnu-x86_64 -i <path> -o .ast"
+            echo '```'
+            echo
+            echo "Checksums are in \`SHA256SUMS\` (and the per-file \`.sha256\` assets); verify with \`sha256sum -c SHA256SUMS --ignore-missing\`."
+            echo
+            echo "macOS note: the binaries are not notarized, so the first launch of a downloaded file needs Gatekeeper approval (right-click → Open, or \`xattr -d com.apple.quarantine <binary>\`)."
+          } > /tmp/notes/notes.md
+      - name: Create the release and upload the assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes/notes.md
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
