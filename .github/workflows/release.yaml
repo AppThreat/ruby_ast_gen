@@ -61,6 +61,10 @@ on:
         description: "CRuby runtime pressed into the binaries"
         required: false
         default: "4.0.6"
+      tebako_version:
+        description: "tebako release used for pressing (spike runs; tags use the pinned default)"
+        required: false
+        default: "v2.1.8"
       upx:
         description: "Attempt UPX compression on the linux-gnu binaries (falls back automatically)"
         required: false
@@ -77,7 +81,7 @@ concurrency:
 
 env:
   SEA_RUBY_VERSION: ${{ github.event.inputs.sea_ruby || '4.0.6' }}
-  TEBAKO_VERSION: v2.1.8
+  TEBAKO_VERSION: ${{ github.event.inputs.tebako_version || 'v2.1.8' }}
 
 permissions:
   contents: write
