@@ -1,0 +1,14 @@
+.github/workflows/release.yaml
+  h_6a4cc5cdf68def 64-67,84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dd76c6fbb08ba2c64acd4e25ce15856325ff78c2",
+  "prompts": {},
+  "humans": {
+    "h_6a4cc5cdf68def": {
+      "author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
