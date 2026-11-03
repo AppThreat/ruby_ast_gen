@@ -148,7 +148,8 @@ jobs:
             -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
             alpine:3.21 sh -c '
               set -e
-              apk add --no-cache -q curl ca-certificates build-base cmake clang file su-exec
+              apk add --no-cache -q curl ca-certificates build-base cmake clang file su-exec bash
+              ln -sf /bin/bash /bin/sh
               ln -sf /usr/bin/clang /usr/bin/cc
               cc --version | grep -q clang || { echo "cc is not clang" >&2; exit 1; }
               mkdir -p /tmp/sea-home && chown "$HOST_UID:$HOST_GID" /tmp/sea-home
@@ -216,7 +217,7 @@ jobs:
           update: false
           install: >-
             mingw-w64-ucrt-x86_64-toolchain
-            make
+            mingw-w64-ucrt-x86_64-make
       - name: Press the executable
         shell: pwsh
         # sea.ps1 reads SEA_RUBY_VERSION/TEBAKO_VERSION from the workflow-level
@@ -226,6 +227,12 @@ jobs:
           # press, with a cc hardlink because mingw ships gcc but not cc.
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           cmd /c mklink /H C:\msys64\ucrt64\bin\cc.exe C:\msys64\ucrt64\bin\gcc.exe 2>$null
+          # MSYS2's own make rewrites C:/ prerequisites to /C/ and cannot find
+          # the SDK headers; the mingw make understands drive-letter paths.
+          cmd /c mklink /H C:\msys64\ucrt64\bin\make.exe C:\msys64\ucrt64\bin\mingw32-make.exe 2>$null
+          Get-Command cc, gcc, make | Format-Table Name, Source
+          cc --version
+          make --version
           ./build/sea.ps1
       - name: Upload the binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
