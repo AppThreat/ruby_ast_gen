@@ -8,7 +8,7 @@
 # the distribution that needs nothing but the OS.
 #
 # Legs and why they are shaped this way:
-#   - linux-gnu:  pressed on the matching Ubuntu runner. The toolchain MUST be
+#   - linux-gnu:  pressed in an ubuntu:20.04 container (glibc 2.31 floor). Toolchain MUST be
 #     clang: tebako's runtime SDK embeds the compiler flags of its build farm
 #     (-fdeclspec, clang-18) in RbConfig, and gcc rejects them, so cc is
 #     repointed at clang before pressing.
@@ -60,11 +60,11 @@ on:
       sea_ruby:
         description: "CRuby runtime pressed into the binaries"
         required: false
-        default: "4.0.6"
+        default: "4.0.7"
       tebako_version:
         description: "tebako release used for pressing (spike runs; tags use the pinned default)"
         required: false
-        default: "v2.1.8"
+        default: "v2.8.68"
       upx:
         description: "Attempt UPX compression on the linux-gnu binaries (falls back automatically)"
         required: false
@@ -80,8 +80,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  SEA_RUBY_VERSION: ${{ github.event.inputs.sea_ruby || '4.0.6' }}
-  TEBAKO_VERSION: ${{ github.event.inputs.tebako_version || 'v2.1.8' }}
+  SEA_RUBY_VERSION: ${{ github.event.inputs.sea_ruby || '4.0.7' }}
+  TEBAKO_VERSION: ${{ github.event.inputs.tebako_version || 'v2.8.68' }}
 
 permissions:
   contents: write
@@ -100,17 +100,27 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install the press toolchain (clang — see the header comment)
+      # Pressed inside ubuntu:20.04 (glibc 2.31), not on the runner: prism's native
+      # extension is compiled at press time against the BUILD host's glibc. Pressed
+      # on ubuntu-24.04 it needs GLIBC_2.33, fails to load on Ubuntu 20.04 / Debian 11
+      # / RHEL 8, and ruby_ast_gen then silently falls back to the parser gem's
+      # Ruby 3.3 grammar. The smoke test inside the container checks the prism backend.
+      # cc is repointed at clang for the reason in the header comment.
+      - name: Press the executable (ubuntu:20.04 container)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq clang build-essential cmake upx-ucl curl ca-certificates file
-          # Repoint cc at clang and *verify*: if this silently failed, the
-          # press would die deep inside tebako with the -fdeclspec error the
-          # header comment warns about, from a much harder-to-read place.
-          sudo ln -sf "$(command -v clang)" /usr/local/bin/cc
-          cc --version | grep -qi clang || { echo "cc is not clang: $(command -v cc)" >&2; exit 1; }
-      - name: Press the executable
-        run: ./build/sea.sh
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e SEA_RUBY_VERSION -e TEBAKO_VERSION -e SEA_UPX \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -e DEBIAN_FRONTEND=noninteractive \
+            ubuntu:20.04 sh -c '
+              set -e
+              apt-get update -qq
+              apt-get install -y -qq clang build-essential cmake upx-ucl curl ca-certificates file
+              ln -sf "$(command -v clang)" /usr/local/bin/cc
+              cc --version | grep -qi clang || { echo "cc is not clang" >&2; exit 1; }
+              mkdir -p /tmp/sea-home && chown "$HOST_UID:$HOST_GID" /tmp/sea-home
+              setpriv --reuid "$HOST_UID" --regid "$HOST_GID" --clear-groups \
+                env HOME=/tmp/sea-home ./build/sea.sh
+            '
         env:
           SEA_UPX: ${{ github.event_name == 'workflow_dispatch' && inputs.upx && '1' || '0' }}
       - name: Upload the binary
@@ -205,35 +215,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up the ucrt64 toolchain (gem native extensions compile at press time)
-        # Pin a *release* commit, not one from the development branch: this
-        # action's default branch carries only sources (main.js, src/), and the
-        # bundled index.js its action.yml names exists solely on the commits the
-        # v2 tag moves across. A dev-branch SHA fails the run before any step of
-        # ours executes, with "File not found: ...\index.js".
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
-        with:
-          msystem: UCRT64
-          update: false
-          install: >-
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-make
+      # No compiler is needed: with SEA_BUNDLED_PRISM=1 the press installs only the
+      # pure-Ruby gems and the executable uses the runtime's own prism gem, so the
+      # press-time native-extension build (the step that failed) never happens.
       - name: Press the executable
         shell: pwsh
-        # sea.ps1 reads SEA_RUBY_VERSION/TEBAKO_VERSION from the workflow-level
-        # env:, so a dispatch's sea_ruby input reaches this leg like the others.
-        run: |
-          # msys2 does not touch the outer shell; hand the ucrt64 tools to the
-          # press, with a cc hardlink because mingw ships gcc but not cc.
-          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
-          cmd /c mklink /H C:\msys64\ucrt64\bin\cc.exe C:\msys64\ucrt64\bin\gcc.exe 2>$null
-          # MSYS2's own make rewrites C:/ prerequisites to /C/ and cannot find
-          # the SDK headers; the mingw make understands drive-letter paths.
-          cmd /c mklink /H C:\msys64\ucrt64\bin\make.exe C:\msys64\ucrt64\bin\mingw32-make.exe 2>$null
-          Get-Command cc, gcc, make | Format-Table Name, Source
-          cc --version
-          make --version
-          ./build/sea.ps1
+        env:
+          SEA_BUNDLED_PRISM: "1"
+        run: ./build/sea.ps1
       - name: Upload the binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

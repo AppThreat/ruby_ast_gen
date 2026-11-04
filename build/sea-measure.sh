@@ -11,7 +11,7 @@
 # Extra ruby_ast_gen flags can be passed through MEASURE_ARGS
 # (for example MEASURE_ARGS="--parser-target 3.4").
 # Prints one tab-separated row per input:
-#   input  gem_s  exe_s  gem_rss_mb  exe_rss_mb  files  differing_files
+#   input  gem_s  exe_s  gem_rss_mb  exe_rss_mb  files  differing_files  differing_after_masking_runtime_fields
 set -eu
 
 EXE=$1
@@ -42,10 +42,26 @@ for input in "$@"; do
   exe_s=$secs; exe_rss=$rss
   files=$(find "$WORK/gem" -type f | wc -l | tr -d ' ')
   differing=$(diff -rq "$WORK/gem" "$WORK/exe" | wc -l | tr -d ' ')
+  # Same comparison with the runtime-identity fields masked: what remains is a real AST difference.
+  for side in gem exe; do
+    find "$WORK/$side" -type f | while read -r f; do
+      expr='s/"(ruby_version|parser_backend)":"[^"]*"/"\1":"_"/g'
+      # The manifest also carries a timestamp and the output directory, which differ between any two runs.
+      case "$f" in */ruby_ast_gen_manifest.jsonl) expr="$expr;"'s/"(generated_at|output)":"[^"]*"/"\1":"_"/g' ;; esac
+      sed -E "$expr" "$f" >"$f.norm"
+      mv "$f.norm" "$f"
+    done
+  done
+  masked=$(diff -rq "$WORK/gem" "$WORK/exe" | wc -l | tr -d ' ')
   if [ "$differing" != 0 ]; then
     mkdir -p "${MEASURE_KEEP:-$WORK/keep}/$name"
-    diff -rq "$WORK/gem" "$WORK/exe" | head -20 >"${MEASURE_KEEP:-$WORK/keep}/$name/diff.txt"
-    cat "${MEASURE_KEEP:-$WORK/keep}/$name/diff.txt" >&2
+    diff -rq "$WORK/gem" "$WORK/exe" >"${MEASURE_KEEP:-$WORK/keep}/$name/diff.txt" || true
+    # Keep one differing pair for inspection (MEASURE_KEEP only).
+    first=$(sed -n '1s/^Files \(.*\) and \(.*\) differ$/\1|\2/p' "${MEASURE_KEEP:-$WORK/keep}/$name/diff.txt")
+    if [ -n "${MEASURE_KEEP:-}" ] && [ -n "$first" ]; then
+      cp "${first%%|*}" "$MEASURE_KEEP/$name/first.gem" 2>/dev/null || true
+      cp "${first##*|}" "$MEASURE_KEEP/$name/first.exe" 2>/dev/null || true
+    fi
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$gem_s" "$exe_s" "$gem_rss" "$exe_rss" "$files" "$differing"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$gem_s" "$exe_s" "$gem_rss" "$exe_rss" "$files" "$differing" "$masked"
 done
