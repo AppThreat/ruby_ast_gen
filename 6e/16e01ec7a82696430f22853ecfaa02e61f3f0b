@@ -1,0 +1,14 @@
+sea/entry.rb
+  h_6a4cc5cdf68def 48-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e16e01ec7a82696430f22853ecfaa02e61f3f0b",
+  "prompts": {},
+  "humans": {
+    "h_6a4cc5cdf68def": {
+      "author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
