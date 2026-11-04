@@ -1,0 +1,18 @@
+lib/ruby_ast_gen.rb
+  h_6a4cc5cdf68def 670
+sea/entry.rb
+  h_6a4cc5cdf68def 38-53
+spec/discovery_spec.rb
+  h_6a4cc5cdf68def 179-223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "70ed7e9af60be7959bb80e4ba71fe1066e49e736",
+  "prompts": {},
+  "humans": {
+    "h_6a4cc5cdf68def": {
+      "author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
