@@ -5,10 +5,14 @@ CI run [41749225726](https://github.com/AppThreat/ruby_ast_gen/actions/runs/4174
 (all seven legs green) unless a row says otherwise. Executables carry CRuby 4.0.7 and were
 pressed with tebako v2.8.68. The measurement harness is `build/sea-measure.sh`.
 
-Test machines: Apple Silicon Mac (macOS 26, Docker Desktop for the Linux arm64 rows),
+Test machines: Apple Silicon Mac (macOS 15.8.1, Docker Desktop for the Linux arm64 rows),
 Parallels Windows 11 ARM64 VM (4 cores, 16 GB) for everything Windows.
 **Not measured:** native Linux x86_64 timings (x86_64 binaries were only started under
 emulation), a real Intel Mac (Rosetta only), a real `windows-11-arm` GitHub runner.
+
+A review of the first version of this write-up found problems in the harness and in the
+scripts; they are fixed on this branch and the affected numbers were re-run. See
+"Review follow-up" at the end.
 
 ## What had to change before any leg built (tebako v2.1.8 → v2.8.68)
 
@@ -17,7 +21,8 @@ emulation), a real Intel Mac (Rosetta only), a real `windows-11-arm` GitHub runn
 | Runtime 4.0.6 on macOS arm64 cannot be fetched with v2.8.68: the runtime release `v0.16.32-ruby4.0` has no `.asc` for `tebako-runtime-0.16.32-4.0.6-macos-arm64.tar.gz`, and tebako refuses an unsigned runtime. 4.0.5 and 4.0.7 have it. | CI run 41737612256, macOS arm64 leg | Default runtime is now 4.0.7 |
 | musl legs: Ruby's `configure` (run to provision the SDK) dies with `bad substitution` under Alpine's busybox `sh`. | CI run 41737612256, both musl legs | `apk add bash` and `/bin/sh -> bash` in the container |
 | The `linux-gnu` binaries pressed on ubuntu-24.04 contain a `prism.so` that needs `GLIBC_2.33`. On glibc 2.31 (Ubuntu 20.04, Debian 11) `require "prism"` fails, and `ruby_ast_gen` silently falls back to the `parser` gem: `Parser::Ruby33` backend, grammar 3.3, no prism translation parsers, plus a warning on stderr. The release notes claim Ubuntu 20.04 support; the ELF starts there, but the AST is not the same. | `objdump -T` on the extracted `prism.so`; `--parser-info` in `ubuntu:20.04` | Linux gnu legs now press inside `ubuntu:20.04` (glibc 2.31, clang 10). Verified: backend is `Prism::Translation::Parser41` on Ubuntu 20.04 for both archs |
-| Windows (#17): see below. | | Windows leg presses without a compiler |
+| Windows (#17): see below. | | Windows leg presses without a compiler on pull requests and dispatches |
+| The macOS arm64 `prism.bundle` pressed on the `macos-26` runner has `minos 26.0` (`vtool -show-build` on the copy the executable extracts at run time); the tebako runtime has `minos 14.0`. It still loads on macOS 15.8.1, but nothing set the floor. | CI run 41749225726 artifact | `sea.sh` exports `MACOSX_DEPLOYMENT_TARGET=14.0` on macOS. A local press with it gives `minos 14.0` |
 
 ## #16: Linux and macOS
 
@@ -29,8 +34,13 @@ Inputs: the repo's syntax fixtures (9 AST files), `project_layout` (5), railsgoa
 maybe (599) and mastodon (2093) at the default depth. Counts include the manifest and the
 diagnostics file.
 
-- Per-file AST JSON: **byte-identical on all inputs** once `ruby_version` is masked. 0 files
-  differ in any other way (2,795 AST files per executable, plus the manifest of each run).
+- Per-file AST JSON: **byte-identical on all inputs** once `ruby_version` is masked, with
+  `parser_backend` compared as well (2,795 AST files per executable, plus the manifest of
+  each run). Re-run with the corrected harness (see "Review follow-up") for the gnu-arm64
+  and musl-arm64 executables against the gem on Ruby 4.0.9, and for the macOS arm64
+  executable against the gem on Ruby 4.0.7: 0 files differ after masking, 0 backend
+  mismatches. The Ruby 3.4.12 comparison was not re-run; it was made with the first
+  harness, which also masked `parser_backend`.
 - Without masking, every file differs, because the per-file JSON embeds `ruby_version`
   (`3.4.12` or `4.0.9` for the gem, `4.0.7` for the executable). Against the macOS gem
   running the same 4.0.7, only the manifest differs.
@@ -81,11 +91,12 @@ musl and macOS rows are within noise of these):
 | maybe (600) | 1.28 | 1.16 | 60 MB | 174 MB |
 | mastodon (2,094) | 3.85 | 3.11 | 76 MB | 221 MB |
 
-On macOS arm64 (gem on Ruby 4.0.7): 0.13/0.35 s, 0.17/0.41 s, 0.94/1.16 s, 2.78/3.00 s for the
-same four inputs; RSS 36 to 68 MB (gem) against 149 to 180 MB (exe). The executable adds
-about 0.2 s per invocation and about 100 MB of RSS, and gets faster per file than the gem
-only on large trees on Linux. For a per-file `parsa rb` invocation pattern that is a real
-cost; for one run per project it is not.
+On macOS arm64 (gem on Ruby 4.0.7, re-run with the corrected harness): 0.12/0.33 s,
+0.18/0.40 s, 0.95/1.14 s, 2.78/2.97 s for the same four inputs; RSS 34 to 64 MB (gem) against
+151 to 178 MB (exe). The executable adds about 0.2 s per invocation and about 100 MB of RSS.
+It was faster than the gem only on mastodon on Linux; on macOS it was slower on every input.
+Every timing is a single run, so differences under about 0.1 s are noise. For a per-file
+`parsa rb` invocation pattern that is a real cost; for one run per project it is not.
 
 Failure modes of the unpack (Linux, non-root, `ubuntu:24.04`; macOS behaves the same):
 
@@ -94,6 +105,13 @@ Failure modes of the unpack (Linux, non-root, `ubuntu:24.04`; macOS behaves the 
 - No `$HOME` and no `TEBAKO_HOME`: `cannot determine tebako home (set TEBAKO_HOME)`.
 - `noexec` cache directory: `cannot execute runtime .../tebako-runtime-...: Permission denied`.
   The runtime is an ELF executed from the cache, so a `noexec` home cannot work.
+- `noexec` `/tmp` (with a good `TEBAKO_HOME`): **silent grammar downgrade**. At run time
+  tebako copies prism's native extension (and racc's) into `$TMPDIR/tebako-exec-*/` and
+  loads it from there. With `--tmpfs /tmp:noexec` the gnu-arm64 executable reported
+  `Parser::Ruby33`, `Prism translation parsers: none`, and exited 0. `TMPDIR` pointed at an
+  exec-capable directory restores `Parser41`. `sea/entry.rb` now prints the cause on stderr
+  when prism does not load; the run still continues, as the gem does without prism.
+  An unwritable `TMPDIR` fails differently: tebako's own initialization aborts.
 - Eight concurrent cold starts on an empty home: all eight succeeded, one printed the
   unsigned-package warning. The lock handling works.
 - Two different builds with the same package name and version in one cache print a
@@ -118,7 +136,11 @@ macOS arm64 executable, with rbenv Ruby 4.0.7 installed:
 
 Oldest glibc: after the press-container change, the gnu executables report the prism backend
 on Ubuntu 20.04 (glibc 2.31) for both architectures (x86_64 under emulation). Anything older
-(RHEL 8 is 2.28) was not tried. The tebako runtime itself needs `GLIBC_2.30`.
+was not tried. The tebako runtime itself needs `GLIBC_2.30`, so RHEL 8 (2.28) cannot work;
+the release notes now say glibc 2.31, Ubuntu 20.04+, Debian 11+ and RHEL 9+.
+
+Oldest macOS: with `MACOSX_DEPLOYMENT_TARGET=14.0` prism's extension matches the runtime's
+`minos 14.0`. Nothing older than macOS 15.8.1 was run.
 
 ### Release hygiene compared with parsa
 
@@ -139,13 +161,18 @@ first run; `tebako press --sign` exists).
 1. sets `TEBAKO_HOME` to a writable, exec-capable directory it controls (for example under
    its own cache dir), and treats `Permission denied` / `os error 2` from the bootstrap as
    "fall back to the gem",
-2. launches it with `RUBYOPT`, `BUNDLE_*`, `GEM_*` and `RUBYLIB` removed,
-3. ignores stderr noise from the bootstrap,
-4. accepts that `ruby_version` in the JSON is the bundled `4.0.7`.
+2. sets `TMPDIR` to a writable, exec-capable directory as well, because native extensions
+   are extracted there on every run,
+3. checks that the run used prism, from the manifest's `parser_backend` or a one-time
+   `--parser-info`, since a failed prism load still exits 0,
+4. launches it with `RUBYOPT`, `BUNDLE_*`, `GEM_*` and `RUBYLIB` removed,
+5. ignores stderr noise from the bootstrap,
+6. accepts that `ruby_version` in the JSON is the bundled `4.0.7`.
 
 Changes needed here first: merge the workflow changes on this branch (tebako v2.8.68,
-runtime 4.0.7, musl bash, gnu press in `ubuntu:20.04`); add provenance and an SBOM; decide
-on signing. Expect about 0.2 s and 100 MB RSS more per invocation than the gem.
+runtime 4.0.7, musl bash, gnu press in `ubuntu:20.04`, macOS deployment target); add
+provenance and an SBOM; decide on signing. Expect about 0.2 s and 100 MB RSS more per
+invocation than the gem.
 
 ## #17: Windows x64
 
@@ -171,21 +198,25 @@ What happened, in order:
 3. Avoiding the native build: prism is a default gem in the Ruby 4.0 runtime, so dropping
    `gem "prism"` from the pressed Gemfile (`SEA_BUNDLED_PRISM=1` in `build/sea.ps1`) installs
    only pure-Ruby gems, needs no compiler, and the press succeeds. In CI the Windows leg no
-   longer installs msys2.
+   longer installs msys2. The switch is set on pull requests and dispatches only; a tag
+   presses without it and fails, so no prism-1.8.1 executable can reach a release by accident.
+   The smoke test in `sea.ps1` now checks the prism version against the Gemfile's `~> 1.9`
+   and, with the switch, prints a warning instead of failing.
 4. The executable then exposed a real bug in the Ruby code, not in tebako: with a native
    Windows input path (`-i C:\dir\file.rb`) a single file is written to
    `<out>/C:\dir\file.rb.json` (an invalid path, so nothing is written) and a directory input
    writes only the manifest. `process_file` splits on `/` only. Forward-slash paths work.
    The same bug exists in the gem (reproduced with Ruby 3.4.10 on the VM). Fixed on this
    branch by normalizing `File::ALT_SEPARATOR` in `RubyAstGen.parse`; verified on the VM with
-   the gem. No test was added.
+   the gem, and covered by `spec/discovery_spec.rb`, which stubs `File::ALT_SEPARATOR` so the
+   test runs on every OS. On Windows, `file_path` and the manifest's `input` now use `/`.
 
 Measurements (the VM runs the x64 executable under Windows-on-Arm emulation, so absolute times
 are pessimistic; no native x64 Windows machine was available):
 
 | | Result |
 | --- | --- |
-| Parity vs the macOS executable (prism 1.9.0) | syntax fixtures and railsgoat: identical AST except absolute path strings (`file_path`, `__FILE__` literals) that come from the different input locations. `maybe` was not compared |
+| Parity vs the macOS executable (prism 1.9.0) | railsgoat (90 files) and maybe (600): every AST file identical, 0 backend mismatches, once each tree's input root is masked (`file_path` and `__FILE__` literals embed it). Measured with `build/sea-measure.sh --compare`. The manifests differ only in `files_excluded` (210 against 239) because the VM's copy of maybe has no `.git` directory, which holds 29 files. The syntax fixtures were compared by hand before the harness had this mode |
 | Parity vs the gem | not compared directly; the VM gem used prism 1.5.3 |
 | Grammar | `--parser-target` 3.3 / 3.4 / 4.0 / 4.1 select Parser33 / 34 / 40 / 41 |
 | Size / unpacked | 85.0 MB / 78 MB |
@@ -228,15 +259,44 @@ parity holds); revisit native arm64 when tebako ships `tebako` and `tebako-boots
 
 ## Recommendation for #17
 
-Publish the Windows x64 executable after it has been run on a real x64 Windows machine (only an
-emulated one was available here), and after the release job's asset count (currently 6) and
-`needs:` list are updated to include the Windows leg. Document that this asset carries prism
-1.8.1 until prism 1.9 can be built on Windows.
+Publish the Windows x64 executable only after two things change. First, a real x64 Windows
+machine has to run it (only an emulated one was available here). Second, it has to carry
+prism ~> 1.9, which means the native build has to work. Shipping it with the runtime's
+prism 1.8.1 is a product decision: parity held on the corpora above, but the gem declares
+~> 1.9. The workflow refuses it on tags for that reason, and switching that policy means
+changing the `SEA_BUNDLED_PRISM` expression, the release job's download pattern, the asset
+count (6) and `needs:`.
 
 ## Reproducing
 
-- Linux/macOS press: `TEBAKO_VERSION=v2.8.68 SEA_RUBY_VERSION=4.0.7 ./build/sea.sh`
-  (`sea.sh` installs tebako into `~/.local/bin`).
-- Windows press: `SEA_BUNDLED_PRISM=1 TEBAKO_VERSION=v2.8.68 SEA_RUBY_VERSION=4.0.7
-  pwsh build/sea.ps1`.
-- Parity and cost: `build/sea-measure.sh <exe> "<gem command>" <dirs...>`.
+- Linux/macOS press: `./build/sea.sh` (defaults: runtime 4.0.7, tebako v2.8.68). A tebako
+  already on `PATH` is used only if it is the pinned version; otherwise the pinned release is
+  installed into `~/.local/bin`, replacing the copy there.
+- Windows press: `$env:SEA_BUNDLED_PRISM = "1"; ./build/sea.ps1`.
+- Parity and cost: `build/sea-measure.sh <exe> "<gem command>" <dirs...>`. Start it with
+  `TEBAKO_HOME` and `TMPDIR` set if the defaults are not writable and exec-capable.
+- Cross-machine parity: `build/sea-measure.sh --compare <treeA> <rootA> <treeB> <rootB>`.
+
+## Review follow-up
+
+A review of the first version found these, all addressed on this branch:
+
+- **`noexec` `/tmp` downgrades the grammar silently.** See the failure-mode list under #16.
+  `sea/entry.rb` now names the cause on stderr, the release notes say `TMPDIR` must allow
+  exec, and the #16 recommendation has parsa set `TMPDIR` and check the backend.
+- **The harness masked `parser_backend`.** That hid exactly the fallback above:
+  on railsgoat a prism-less run produces the same AST as `Parser41`. `sea-measure.sh` now masks
+  only `ruby_version` (and the manifest's run-specific fields), reports backend mismatches in
+  their own column, prints `FAIL(<status>)` for a failed run, warms the executable up before
+  timing, and keeps unmasked diffs. Checked against a wrapper that hides prism from the gem:
+  90 of 90 railsgoat files flagged. Linux gnu, Linux musl and macOS parity were re-run with it.
+- **macOS deployment target.** See the table at the top.
+- **Pinned tebako not enforced.** Both scripts used any `tebako` on `PATH`. They now check
+  `tebako --version` against the pin.
+- **Prism version not checked.** Both smoke tests now compare `Prism gem:` with the Gemfile's
+  `~> 1.9`.
+- **Stale comments and defaults.** Script defaults, the workflow header, the Windows job
+  comment and the release notes described tebako v2.1.8 and #486. The release notes also
+  claimed RHEL without a glibc floor.
+- **Container images** are now pinned by digest, like the actions.
+- **Windows path fix** has a test.
