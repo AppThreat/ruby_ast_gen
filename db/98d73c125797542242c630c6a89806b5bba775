@@ -1,0 +1,16 @@
+build/sea-measure.sh
+  h_6a4cc5cdf68def 1-51
+build/sea.ps1
+  h_6a4cc5cdf68def 127-133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "db98d73c125797542242c630c6a89806b5bba775",
+  "prompts": {},
+  "humans": {
+    "h_6a4cc5cdf68def": {
+      "author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
