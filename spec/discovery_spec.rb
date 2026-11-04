@@ -176,4 +176,49 @@ RSpec.describe "file discovery and worker mechanics" do
       expect { NodeHandling.fetch_member(exploding, :line) }.to raise_error(ArgumentError, "shape changed")
     end
   end
+
+  # A native Windows path (`-i C:\dir`) used to produce no AST output: discovery and the output
+  # layout split on '/', and Dir.glob reads a backslash as an escape. The input is normalized to
+  # '/' wherever File::ALT_SEPARATOR is set. Stubbing the constant runs the same code path on
+  # POSIX, where the backslashed form of a real path converts back to that path.
+  describe "input paths with the alternate separator" do
+    def native(path)
+      path.tr("/", "\\")
+    end
+
+    before { stub_const("File::ALT_SEPARATOR", "\\") }
+
+    it "parses a directory given with backslashes into the same tree" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "top.rb"), "x = 1\n")
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User; end\n")
+
+        Dir.mktmpdir do |out_dir|
+          manifest = RubyAstGen.parse(input: native(dir), output: out_dir, exclude: "ZZZNOMATCH")
+
+          expect(manifest[:files_parsed]).to eq(2)
+          expect(manifest[:input]).to eq(dir)
+          expect(File).to exist(File.join(out_dir, "top.rb.json"))
+          user = JSON.parse(File.read(File.join(out_dir, "app", "models", "user.rb.json")))
+          expect(user["rel_file_path"]).to eq("app/models/user.rb")
+          expect(user["file_path"]).to eq(File.join(dir, "app", "models", "user.rb"))
+        end
+      end
+    end
+
+    it "writes a single file given with backslashes next to the output root" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "one.rb")
+        File.write(path, "x = 1\n")
+
+        Dir.mktmpdir do |out_dir|
+          RubyAstGen.parse(input: native(path), output: out_dir, exclude: "ZZZNOMATCH")
+
+          expect(Dir.children(out_dir)).to include("one.rb.json")
+          expect(JSON.parse(File.read(File.join(out_dir, "one.rb.json")))["file_path"]).to eq(path)
+        end
+      end
+    end
+  end
 end

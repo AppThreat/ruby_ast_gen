@@ -667,7 +667,7 @@ module RubyAstGen
   # when the source decoded cleanly: a `# coding: ASCII-8BIT` file is decoded faithfully (any
   # byte is valid in that encoding) and yields binary node values and code snippets, which
   # JSON.generate rejects. Top-level path keys are assigned after this walk, so file_path stays
-  # byte-for-byte what the caller passed in.
+  # byte-for-byte the input path (on Windows, after .parse has turned backslashes into '/').
   def self.force_utf8_payloads!(json_ast)
     state = { scrubbed: false }
     sanitize_utf8!(json_ast, state)

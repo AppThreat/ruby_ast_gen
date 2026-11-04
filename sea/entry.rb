@@ -35,4 +35,20 @@ end
 end
 Gem.clear_paths
 
+# The executable always ships prism, so failing to load it means the host
+# broke the native extension, not that prism is missing. tebako copies
+# prism.so/prism.bundle into $TMPDIR at run time and loads it from there: with a
+# noexec /tmp the load fails, and ruby_ast_gen falls back to the parser gem's
+# Ruby 3.3 grammar while still exiting 0. The run continues on purpose (a
+# non-zero exit costs the caller every file), but the cause is printed on
+# stderr, since the parser gem's own warning does not name it.
+begin
+  require "prism"
+rescue LoadError => e
+  warn "ruby_ast_gen: the bundled prism extension did not load (#{e.message}). " \
+    "Falling back to the parser gem's older grammar. Native extensions are extracted " \
+    "to the temporary directory at run time, so TMPDIR must point at a writable " \
+    "directory that allows executing files."
+end
+
 load File.expand_path("../exe/ruby_ast_gen", __dir__)
