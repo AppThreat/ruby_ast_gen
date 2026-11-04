@@ -124,6 +124,13 @@ gem "ostruct", "~> 0.6.3"
 gem "parser", "~> 3.3.12.0"
 gem "prism", "~> 1.9"
 "@ | Set-Content (Join-Path $BuildRoot "Gemfile")
+    # SPIKE (issues #16-#18): SEA_BUNDLED_PRISM=1 drops the prism line so that no
+    # native extension is compiled at press time and the runtime's own default
+    # prism gem is used instead. Not a release configuration.
+    if ($env:SEA_BUNDLED_PRISM -eq "1") {
+        (Get-Content (Join-Path $BuildRoot "Gemfile")) -notmatch '^gem "prism"' |
+            Set-Content (Join-Path $BuildRoot "Gemfile")
+    }
 
     # -----------------------------------------------------------------------
     # 3. Press
