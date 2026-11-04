@@ -45,6 +45,10 @@ Gem.clear_paths
 begin
   require "prism"
 rescue LoadError => e
+  # prism.rb sets Prism::BACKEND before it requires the extension, and the
+  # gem's own require "prism" re-runs that file; drop the constant so the retry
+  # does not add an "already initialized constant" warning.
+  Prism.send(:remove_const, :BACKEND) if defined?(Prism::BACKEND)
   warn "ruby_ast_gen: the bundled prism extension did not load (#{e.message}). " \
     "Falling back to the parser gem's older grammar. Native extensions are extracted " \
     "to the temporary directory at run time, so TMPDIR must point at a writable " \
