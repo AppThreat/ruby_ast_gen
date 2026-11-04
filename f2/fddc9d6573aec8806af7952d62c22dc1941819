@@ -1,0 +1,16 @@
+.github/workflows/release.yaml
+  h_6a4cc5cdf68def 11,63,67,83-84,103-109,111-123,218-220,223-225
+build/sea-measure.sh
+  h_6a4cc5cdf68def 14,45-55,58-64,66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f2fddc9d6573aec8806af7952d62c22dc1941819",
+  "prompts": {},
+  "humans": {
+    "h_6a4cc5cdf68def": {
+      "author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
