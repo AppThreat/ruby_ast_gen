@@ -13,8 +13,11 @@ Each [release](https://github.com/AppThreat/ruby_ast_gen/releases) attaches a
 single self-contained executable per platform:
 `ruby_ast_gen-<version>-<platform>`, where `<platform>` is one of
 `linux-gnu-x86_64`, `linux-gnu-arm64`, `linux-musl-x86_64`, `linux-musl-arm64`,
-`macos-arm64` or `macos-x86_64`. Windows is not available yet
-([tebako#486](https://github.com/tamatebako/tebako/issues/486)).
+`macos-arm64` or `macos-x86_64`. Windows is not available yet: tebako cannot
+compile prism's native extension during a Windows press.
+
+The gnu binaries need glibc 2.31 or newer (Ubuntu 20.04+, Debian 11+, RHEL 9+),
+and the macOS binaries need macOS 14 or newer.
 
 ```bash
 curl -LO https://github.com/AppThreat/ruby_ast_gen/releases/latest/download/ruby_ast_gen-2.1.0-linux-gnu-x86_64
@@ -25,6 +28,13 @@ chmod +x ruby_ast_gen-2.1.0-linux-gnu-x86_64
 Verify downloads against the release's `SHA256SUMS`. macOS binaries are not
 notarized, so the first launch needs Gatekeeper approval
 (`xattr -d com.apple.quarantine <binary>`).
+
+On first run a binary unpacks its runtime into `$TEBAKO_HOME` (`~/.tebako` by
+default), and on every run it extracts prism's native extension into `$TMPDIR`.
+Both must be writable and allow executing files. On a host with a `noexec`
+`/tmp`, set `TMPDIR` to another directory: otherwise prism does not load and
+the binary falls back to the parser gem's Ruby 3.3 grammar, with a warning on
+stderr and exit status 0.
 
 ### JRuby
 
