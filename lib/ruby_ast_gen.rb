@@ -102,6 +102,10 @@ module RubyAstGen
     Logger.debug "CLI Arguments received: #{opts}"
 
     input_path = opts[:input]
+    # Windows: the path handling below splits on '/', so a native C:\dir\file input would be
+    # mis-split (single file: output nested under the absolute path; directory: nothing written).
+    # File::ALT_SEPARATOR is nil elsewhere, so this is a no-op on POSIX.
+    input_path = input_path.tr(File::ALT_SEPARATOR, '/') if input_path && File::ALT_SEPARATOR
     output_dir = opts[:output]
     exclude_regex = validated_exclude(opts[:exclude])
     parser_target = validated_parser_target(opts[:parser_target])
