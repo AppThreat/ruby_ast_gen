@@ -1,0 +1,20 @@
+.github/workflows/release.yaml
+  h_6a4cc5cdf68def 11-16,23,26-34,113-116,123,168,171-172,210-217,226-227,231,290-291,294-295,297-299
+build/sea-measure.sh
+  h_6a4cc5cdf68def 12-41,44-96,102,104-106,108-110,112-114,116-118,121-123,133-142,147-151
+build/sea.ps1
+  h_6a4cc5cdf68def 5-6,8,10-14,16-21,23-28,31-32,36-37,47,49,63-65,68-76,97-98,124-128,132-134,192-198
+build/sea.sh
+  h_6a4cc5cdf68def 20-30,40,43,87-92,94-106,132-134,137-146,199-217,246-250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "22eb4d3bebff0b5a71f915a428263a90278ea017",
+  "prompts": {},
+  "humans": {
+    "h_6a4cc5cdf68def": {
+      "author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
