@@ -1,0 +1,14 @@
+lib/ruby_ast_gen.rb
+  h_6a4cc5cdf68def 105-108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bdba77ad4094c3604420a7e6990919d7245659bd",
+  "prompts": {},
+  "humans": {
+    "h_6a4cc5cdf68def": {
+      "author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
