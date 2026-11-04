@@ -17,10 +17,17 @@
 # No Ruby is needed: tebako press installs the gems inside the pinned runtime.
 #
 # Inputs (environment):
-#   SEA_RUBY_VERSION  CRuby runtime pressed into the binary (default 4.0.6; must
-#                     exist in `tebako info runtimes --remote` for the platform)
-#   TEBAKO_VERSION    pinned tebako release used for pressing (default v2.1.8;
-#                     must carry the v — it names the release tag/URLs)
+#   SEA_RUBY_VERSION  CRuby runtime pressed into the binary (default 4.0.7; must
+#                     exist in `tebako info runtimes --remote` for the platform,
+#                     with its .asc signature: 4.0.6 has none for macos-arm64)
+#   TEBAKO_VERSION    pinned tebako release used for pressing (default v2.8.68).
+#                     A tebako already on PATH is used only if it is this
+#                     version; otherwise the pinned release is installed into
+#                     ~/.local/bin, replacing whatever copy is there.
+#   MACOSX_DEPLOYMENT_TARGET
+#                     macOS only (default 14.0, the tebako runtime's own floor).
+#                     prism's extension is compiled at press time, and without
+#                     this it targets the build host's macOS version.
 #   SEA_UPX           1 to UPX-compress the binary and verify it still runs
 #                     (Linux only; falls back to the plain binary on any failure)
 #   SEA_DIST          output directory (default: dist)
@@ -30,10 +37,10 @@
 set -eu
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-SEA_RUBY_VERSION=${SEA_RUBY_VERSION:-4.0.6}
+SEA_RUBY_VERSION=${SEA_RUBY_VERSION:-4.0.7}
 # The pinned tebako release used for pressing. The value must carry the v: the
 # tag names the release download URLs below.
-TEBAKO_VERSION=${TEBAKO_VERSION:-v2.1.8}
+TEBAKO_VERSION=${TEBAKO_VERSION:-v2.8.68}
 TEBAKO_VERSION="v${TEBAKO_VERSION#v}"
 SEA_UPX=${SEA_UPX:-0}
 SEA_DIST=${SEA_DIST:-$REPO_ROOT/dist}
@@ -77,15 +84,28 @@ OUT="$SEA_DIST/ruby_ast_gen-$GEM_VERSION-$PLATFORM"
 echo "sea.sh: ruby_ast_gen $GEM_VERSION for $PLATFORM (runtime $SEA_RUBY_VERSION)"
 
 # ---------------------------------------------------------------------------
-# 2. tebako itself, when missing: the four release binaries, each verified
-#    against the release's SHA256SUMS before anything is installed (the same
-#    posture as build/sea.ps1 — the unix legs build 6 of the 7 shipped
-#    binaries, so an unverified curl|sh here is not acceptable either).
+# 2. tebako itself, unless the pinned version is already on PATH: the four
+#    release binaries, each verified against the release's SHA256SUMS before
+#    anything is installed (the same posture as build/sea.ps1 — the unix legs
+#    build 6 of the 7 shipped binaries, so an unverified curl|sh here is not
+#    acceptable either). Any other tebako version is ignored: a press with a
+#    different tebako is a different build, whatever TEBAKO_VERSION says.
 # ---------------------------------------------------------------------------
-if ! command -v tebako >/dev/null 2>&1; then
+vnum=${TEBAKO_VERSION#v}
+tebako_is_pinned() {
+  command -v tebako >/dev/null 2>&1 &&
+    tebako --version 2>/dev/null | tr -s ' \t' '\n\n' | sed 's/^v//' | grep -qxF "$vnum"
+}
+# A pinned copy installed by an earlier run wins over another version elsewhere on PATH.
+if [ -x "$HOME/.local/bin/tebako" ]; then
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+if ! tebako_is_pinned; then
+  if command -v tebako >/dev/null 2>&1; then
+    echo "sea.sh: ignoring $(command -v tebako) ($(tebako --version 2>/dev/null | head -1)); want $TEBAKO_VERSION"
+  fi
   echo "sea.sh: installing tebako $TEBAKO_VERSION (sha256-verified)"
   TEBAKO_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tebako-install.XXXXXX")
-  vnum=${TEBAKO_VERSION#v}
   base="https://github.com/tamatebako/tebako/releases/download/$TEBAKO_VERSION"
   curl -fsSL -o "$TEBAKO_TMP/SHA256SUMS" "$base/SHA256SUMS"
 
@@ -109,9 +129,20 @@ if ! command -v tebako >/dev/null 2>&1; then
   install -m 0755 "$TEBAKO_TMP/tebako" "$TEBAKO_TMP/tebako-pkg" "$TEBAKO_TMP/tfs" \
     "$TEBAKO_TMP/tebako-bootstrap" "$HOME/.local/bin/"
   export PATH="$HOME/.local/bin:$PATH"
-  command -v tebako >/dev/null 2>&1 || {
-    echo "sea.sh: tebako installed but not on PATH" >&2; exit 1;
+  tebako_is_pinned || {
+    echo "sea.sh: tebako $TEBAKO_VERSION installed, but $(command -v tebako || echo 'no tebako') is what PATH resolves" >&2
+    exit 1
   }
+fi
+echo "sea.sh: using $(command -v tebako) ($(tebako --version 2>/dev/null | head -1))"
+
+# prism's native extension is compiled during the press. On macOS clang then
+# targets the build host's OS unless told otherwise: pressed on a macos-26
+# runner, prism.bundle carried minos 26.0 while the runtime itself says 14.0.
+if [ "$os" = Darwin ]; then
+  MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-14.0}
+  export MACOSX_DEPLOYMENT_TARGET
+  echo "sea.sh: MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
 fi
 
 # ---------------------------------------------------------------------------
@@ -165,6 +196,25 @@ echo 'raise "hostile RUBYLIB shadowed the packaged parser gem"' \
   >"$HOSTILE_TMP/parser/source/buffer.rb"
 echo 'raise "hostile RUBYLIB shadowed the packaged stdlib"' >"$HOSTILE_TMP/json.rb"
 
+# The prism floor the pressed Gemfile asks for ("~> 1.9" -> 1.9). Checking only
+# that *a* prism backend loaded would pass with an older prism, such as the
+# runtime's default gem.
+PRISM_MIN=$(sed -n 's/^gem "prism", "~> \(.*\)"$/\1/p' "$BUILD_ROOT/Gemfile")
+[ -n "$PRISM_MIN" ] || { echo "sea.sh: no prism constraint in the pressed Gemfile" >&2; exit 1; }
+
+# True when dotted version $1 is at least $2 (a missing or non-numeric $1 is not).
+version_at_least() {
+  awk -v have="$1" -v want="$2" 'BEGIN {
+    if (have !~ /^[0-9]/) exit 1
+    split(have, h, "."); m = split(want, w, ".")
+    for (i = 1; i <= m; i++) {
+      if ((h[i] + 0) > (w[i] + 0)) exit 0
+      if ((h[i] + 0) < (w[i] + 0)) exit 1
+    }
+    exit 0
+  }'
+}
+
 smoke_test() {
   bin=$1
   env_desc=$2
@@ -191,6 +241,11 @@ smoke_test() {
   }
   hostile --parser-info 2>/dev/null | grep -q "Ruby version: $SEA_RUBY_VERSION" || {
     echo "sea.sh: $env_desc: runtime is not $SEA_RUBY_VERSION" >&2
+    return 1
+  }
+  prism_version=$(pristine --parser-info 2>/dev/null | sed -n 's/^Prism gem: //p')
+  version_at_least "$prism_version" "$PRISM_MIN" || {
+    echo "sea.sh: $env_desc: prism is '$prism_version', the pressed Gemfile asks for ~> $PRISM_MIN" >&2
     return 1
   }
   out_dir=$(mktemp -d "${TMPDIR:-/tmp}/sea-smoke.XXXXXX")

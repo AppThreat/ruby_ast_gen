@@ -2,50 +2,39 @@
 # for Windows (x64, ucrt64 runtime) using tebako <https://tebako.org>.
 #
 # The PowerShell counterpart of build/sea.sh: one native .exe that carries the
-# CRuby runtime, the gems (parser + prism with its native extension) and the
-# application tree, so end users need neither Ruby nor Java installed.
+# CRuby runtime, the gems (parser + prism) and the application tree, so end
+# users need neither Ruby nor Java installed.
 #
-# EXPERIMENTAL — this leg does not currently produce a shippable binary, and
-# the release workflow therefore does not publish one. The cause is a single
-# upstream bug, tamatebako/tebako#486: on windows-ucrt64 the runtime image and
-# the payload image both declare a 'libwinpthread-1.dll' library alias, and the
-# driver refuses the ambiguity rather than picking a winner. It surfaces twice,
-# and the two faces are the same defect seen from opposite sides:
+# EXPERIMENTAL — the release workflow builds this leg but does not publish it.
 #
-#   1. At press time, bundling prism fails with
-#      "extconf failed: No such file or directory - A:/t/bin/ruby.exe" —
-#      preceded by the driver's own "TEBAKO_RUNTIME_IMAGE is not set — booting
-#      with no env image; the runtime root stays empty". The spawned extconf
-#      child boots bare, so A:/t has no interpreter. Supplying the missing
-#      TEBAKO_RUNTIME_IMAGE (spec 17 §1) by hand does mount the env image — and
-#      the press then fails on the #486 alias collision instead, which is what
-#      proves the two are one bug. A press of the same tree with a pure-Ruby
-#      gem set (ostruct + parser, no prism) succeeds either way.
-#   2. A package that does press fails at boot on that same alias collision.
+# History, because it explains the switch below. With tebako v2.1.8 every press
+# failed on tamatebako/tebako#486 (a duplicate 'libwinpthread-1.dll' alias
+# between the runtime and payload images). With v2.8.68 that error is only a
+# warning, and the press instead fails while compiling prism's native
+# extension:
 #
-# Reproduced on a native x64 GitHub runner and a local Windows box, under ruby
-# 3.4.10 and 4.0.6, with runtimes 0.16.18 and 0.16.21, with all six published
-# windows-ucrt64 assets installed and a wiped store — no combination avoids it.
-# #486's documented workaround (pin the runtime to 0.16.9) is not available:
-# tebako 2.1.8's registry publishes 0.16.17 and newer only, and the issue notes
-# the workaround cannot help an app with a native-extension gem anyway, which
-# is exactly what prism is.
+#   - on GitHub's windows-latest the generated Makefile names an MSYS-style
+#     prerequisite, "No rule to make target '/C/Users/runneradmin/.tebako/
+#     deps/sdk/.../include/ruby.h'";
+#   - with MSYS2 ucrt64 or MinGW-Builds gcc on a Windows 11 VM, the SDK's
+#     ruby/win32.h and mingw's sys/time.h / winsock2.h disagree
+#     ("conflicting types for 'gettimeofday'" and 'shutdown').
 #
-# The script is kept working and correct so the leg turns back on with no
-# further changes once tebako fixes these; the smoke tests below are what
-# decides whether a build is shippable.
+# Neither is resolved or reported upstream yet. SEA_BUNDLED_PRISM=1 avoids the
+# native build: it drops prism from the pressed Gemfile, so only pure-Ruby
+# gems are installed, no compiler is needed, and the executable uses the
+# runtime's default prism gem (1.8.1 in runtime 4.0.7) instead of ~> 1.9. The
+# smoke test then accepts that older prism and says so. Without the switch the
+# script still needs a ucrt64 toolchain on PATH and fails as described above.
 #
 #   ./build/sea.ps1                     # press with the pinned defaults
-#   ./build/sea.ps1 -RubyVersion 3.4.10
+#   ./build/sea.ps1 -RubyVersion 4.0.7
+#   $env:SEA_BUNDLED_PRISM = "1"; ./build/sea.ps1
 #
 # SEA_RUBY_VERSION / TEBAKO_VERSION environment variables override the
 # defaults when the parameters are omitted (that is how the release workflow
-# feeds its dispatch input into this script).
-#
-# Prerequisites: a ucrt64 toolchain reachable on PATH (the release workflow
-# provisions MSYS2's mingw-w64-ucrt-x86_64-gcc; tebako's runtime SDK compiles
-# gem native extensions against its own headers at press time) and curl.exe,
-# shipped with Windows.
+# feeds its dispatch input into this script). A tebako already on PATH is used
+# only when it is the pinned version.
 param(
     [string]$RubyVersion = "",
     [string]$TebakoVersion = "",
@@ -55,9 +44,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 if (-not $RubyVersion) { $RubyVersion = $env:SEA_RUBY_VERSION }
-if (-not $RubyVersion) { $RubyVersion = "4.0.6" }
+if (-not $RubyVersion) { $RubyVersion = "4.0.7" }
 if (-not $TebakoVersion) { $TebakoVersion = $env:TEBAKO_VERSION }
-if (-not $TebakoVersion) { $TebakoVersion = "v2.1.8" }
+if (-not $TebakoVersion) { $TebakoVersion = "v2.8.68" }
 # The value must carry the v: it names the release tag in the download URLs.
 $TebakoVersion = "v" + $TebakoVersion.TrimStart("v")
 
@@ -71,14 +60,22 @@ $Out = Join-Path $Dist "ruby_ast_gen-$GemVersion-$Platform.exe"
 Write-Host "sea.ps1: ruby_ast_gen $GemVersion for $Platform (runtime $RubyVersion)"
 
 # ---------------------------------------------------------------------------
-# 1. tebako itself: the four .exe assets of the pinned release, SHA256-verified
-#    (the same procedure build/sea.sh performs on unix).
+# 1. tebako itself, unless the pinned version is already on PATH: the four .exe
+#    assets of the pinned release, SHA256-verified (the same procedure
+#    build/sea.sh performs on unix). Any other tebako version is ignored.
 # ---------------------------------------------------------------------------
 $TebakoBin = Join-Path $env:USERPROFILE ".local\bin"
-if (-not (Get-Command tebako -ErrorAction SilentlyContinue)) {
+$vnum = $TebakoVersion.TrimStart("v")
+function Test-PinnedTebako {
+    if (-not (Get-Command tebako -ErrorAction SilentlyContinue)) { return $false }
+    $tokens = (@(& tebako --version 2>$null) -join " ") -split '\s+' | ForEach-Object { $_.TrimStart("v") }
+    return ($tokens -contains $vnum)
+}
+# A pinned copy installed by an earlier run wins over another version elsewhere on PATH.
+if (Test-Path (Join-Path $TebakoBin "tebako.exe")) { $env:PATH = "$TebakoBin;$env:PATH" }
+if (-not (Test-PinnedTebako)) {
     Write-Host "sea.ps1: installing tebako $TebakoVersion"
     $base = "https://github.com/tamatebako/tebako/releases/download/$TebakoVersion"
-    $vnum = $TebakoVersion.TrimStart("v")
     New-Item -ItemType Directory -Force -Path $TebakoBin | Out-Null
     $tmp = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "tebako-install")
     try {
@@ -97,8 +94,8 @@ if (-not (Get-Command tebako -ErrorAction SilentlyContinue)) {
     }
 }
 $env:PATH = "$TebakoBin;$env:PATH"
-if (-not (Get-Command tebako -ErrorAction SilentlyContinue)) {
-    throw "sea.ps1: tebako installed but not on PATH"
+if (-not (Test-PinnedTebako)) {
+    throw "sea.ps1: tebako $TebakoVersion installed, but PATH does not resolve to it"
 }
 
 # ---------------------------------------------------------------------------
@@ -124,13 +121,17 @@ gem "ostruct", "~> 0.6.3"
 gem "parser", "~> 3.3.12.0"
 gem "prism", "~> 1.9"
 "@ | Set-Content (Join-Path $BuildRoot "Gemfile")
-    # SPIKE (issues #16-#18): SEA_BUNDLED_PRISM=1 drops the prism line so that no
-    # native extension is compiled at press time and the runtime's own default
-    # prism gem is used instead. Not a release configuration.
-    if ($env:SEA_BUNDLED_PRISM -eq "1") {
+    # SEA_BUNDLED_PRISM=1 drops the prism line so that no native extension is
+    # compiled at press time and the runtime's default prism gem is used
+    # instead (see the header). The release workflow never sets it on a tag.
+    $BundledPrism = $env:SEA_BUNDLED_PRISM -eq "1"
+    if ($BundledPrism) {
         (Get-Content (Join-Path $BuildRoot "Gemfile")) -notmatch '^gem "prism"' |
             Set-Content (Join-Path $BuildRoot "Gemfile")
     }
+    # The prism floor the Gemfile asks for ("~> 1.9" -> 1.9), read from the
+    # script's own copy so it cannot drift from the line above.
+    $PrismMin = [version]((Select-String -Path $PSCommandPath -Pattern '^gem "prism", "~> (.*)"$').Matches[0].Groups[1].Value)
 
     # -----------------------------------------------------------------------
     # 3. Press
@@ -188,6 +189,13 @@ gem "prism", "~> 1.9"
         $info = @(& $Out --parser-info 2> $null)
         if (-not ($info -match "Parser backend: Prism")) { throw "sea.ps1: prism backend not selected (pristine)" }
         if (-not ($info -match "Ruby version: $RubyVersion")) { throw "sea.ps1: runtime is not $RubyVersion (pristine)" }
+        $prismLine = @($info -match '^Prism gem: ')[0]
+        $prismVersion = if ($prismLine) { $prismLine -replace '^Prism gem: ', '' } else { "" }
+        $prismOk = $prismVersion -match '^\d+(\.\d+)+$' -and [version]$prismVersion -ge $PrismMin
+        if (-not $prismOk) {
+            if (-not $BundledPrism) { throw "sea.ps1: prism is '$prismVersion', the pressed Gemfile asks for ~> $PrismMin" }
+            Write-Host "sea.ps1: WARNING: SEA_BUNDLED_PRISM=1, so this executable carries the runtime's prism $prismVersion, not ~> $PrismMin"
+        }
 
         & $Out -i (Join-Path $RepoRoot "lib/ruby_ast_gen/version.rb") -o $smokeDir *> $null
         if ($LASTEXITCODE -ne 0) { throw "sea.ps1: parse run failed (pristine)" }
