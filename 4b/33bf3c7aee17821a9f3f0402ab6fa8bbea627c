@@ -1,0 +1,16 @@
+README.md
+  h_6a4cc5cdf68def 16-20,32-38
+docs/sea-spike.md
+  h_6a4cc5cdf68def 8,13-16,24-25,37-43,94-99,108-114,139-143,164-170,173-175,201-204,211-212,219,262-268,272-302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4b33bf3c7aee17821a9f3f0402ab6fa8bbea627c",
+  "prompts": {},
+  "humans": {
+    "h_6a4cc5cdf68def": {
+      "author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
