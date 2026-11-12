@@ -358,6 +358,57 @@ Results with those three in place, runtime 3.4.10 and the Gemfile's `prism ~> 1.
   `Prism gem: 1.9.0` on Ruby 4.0.7, 83.1 MB, SHA-256
   `80316db52c5985879163c1f715909b3aed8a0adc0d86996ba19a80dbfda1c86d`.
 
+### The SDK config.h regression, with a reproducer
+
+No upstream issue carries this (their own nightly does not see it, below), so the
+reproducer lives here. After any press, the provisioned SDK and the toolchain are
+enough to show it; nothing of ruby_ast_gen is involved. Save this as `conftest.c`
+(the same probe mkmf runs first):
+
+```c
+#include "ruby.h"
+#include <winsock2.h>
+#include <windows.h>
+int main(int argc, char **argv)
+{
+  return !!argv[argc];
+}
+```
+
+Compile it with the MSYS2 ucrt64 gcc against the SDK headers (any Ruby version;
+4.0.7 shown, run from an msys2 ucrt64 shell):
+
+```sh
+gcc -c conftest.c   -I"$USERPROFILE/.tebako/deps/sdk/4.0.7-v0.2.38-windows-ucrt64/archhdr"   -I"$USERPROFILE/.tebako/deps/sdk/4.0.7-v0.2.38-windows-ucrt64/include"   -D_WIN32_WINNT=0x0600
+```
+
+The v0.2.38 config.h makes it fail twice:
+
+```text
+.../ucrt64/include/sys/time.h:16:13: error: conflicting types for 'gettimeofday';
+have 'int(struct timeval * restrict, void * restrict)'
+  (ruby/win32.h:318 declares 'int(struct timeval *, struct timezone *)' unconditionally)
+.../include/ruby/missing.h:324:17: error: conflicting types for 'shutdown';
+have 'int(int, int)'
+  (winsock2.h:1036 declares 'int WSAAPI shutdown(SOCKET, int)')
+```
+
+The first fires because config.h defines `HAVE_SYS_TIME_H 1`, so `ruby/missing.h`
+includes mingw's `sys/time.h`; the second because `HAVE_SHUTDOWN` is undefined,
+so `ruby/missing.h` declares `shutdown` itself. Editing the SDK's
+`archhdr/ruby/config.h` to RubyInstaller's mingw feature set, the fix
+`build/sea.ps1` applies, makes the same compile clean: comment out
+`#define HAVE_SYS_TIME_H 1` and add `#define HAVE_SHUTDOWN 1` beside it
+(`HAVE_GETTIMEOFDAY 1` is already defined; the win32.h declaration is not
+guarded by it). The same conftest against a RubyInstaller install's own headers
+(`C:	oolsuby34\includeuby-3.4.0\{include,x64-mingw-ucrt}` on this VM)
+compiles clean, which is the feature set the patch copies.
+
+Why tebako's own CI does not catch it: the nightly rails-windows leg presses with
+a pinned tebako 2.8.44 whose SDK artifacts were served before the registry roll,
+so it exercises pre-regression bytes. Any fresh provisioning today (any tebako
+release tried, 2.8.44 included) fetches the regressed v0.2.38 SDK.
+
 Still open, upstream: the SDK config.h regression (the patch in sea.ps1 works
 around it and can be reverted once tebako-runtime-ruby serves a mingw-compatible
 SDK), and the `/C/...` Makefile paths, which the MSYS make tolerates but tebako
