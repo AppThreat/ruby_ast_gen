@@ -1,0 +1,22 @@
+.github/workflows/pr.yaml
+  s_cd7a37553d7bf5::t_50fc4232be8034 46-52
+.github/workflows/release.yaml
+  s_cd7a37553d7bf5::t_350158f77b7c7c 191-196,203
+  s_cd7a37553d7bf5::t_ce7481b4140a58 26-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fefd67325c643e199c4bfe8cd0d3c2503f344ad2",
+  "prompts": {},
+  "sessions": {
+    "s_cd7a37553d7bf5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "sess_b00a8b8c-312c-48ea-9c84-25b5cb7fc1cb",
+        "model": "GLM-5.3"
+      },
+      "human_author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
