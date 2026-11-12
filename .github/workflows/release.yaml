@@ -23,15 +23,18 @@
 #     musl system; the gnu binaries run on glibc distros (verified on
 #     Ubuntu 20.04 / glibc 2.31).
 #   - macos: arm64 on the current runner, x86_64 on macos-15-intel (the last
-#     Intel image GitHub ships, available until ~Aug 2027). build/sea.sh sets
-#     MACOSX_DEPLOYMENT_TARGET=14.0 so prism's extension does not inherit the
-#     runner's macOS version as its minimum.
-#   - windows: ucrt64 (x64), EXPERIMENTAL and unpublished. tebako v2.8.68 cannot
-#     compile prism's native extension on Windows (see build/sea.ps1's header),
-#     so pull requests and dispatches press with SEA_BUNDLED_PRISM=1, which
-#     uses the runtime's prism 1.8.1 instead of ~> 1.9. Tags press without it:
-#     a release must not ship an older prism than the gem, so the leg fails on
-#     tags until the native build works. It blocks nothing either way.
+#     Intel image GitHub ships, available until ~Aug 2027; that leg runs only
+#     on tags, so build-only dry runs do not queue the scarce Intel runner).
+#     build/sea.sh sets MACOSX_DEPLOYMENT_TARGET=14.0 so prism's extension
+#     does not inherit the runner's macOS version as its minimum.
+#   - windows: ucrt64 (x64), EXPERIMENTAL and unpublished. With tebako v2.8.77
+#     the press compiles prism's native extension again (the tamatebako/tebako
+#     #753 fix chain is in the driver), given the MSYS2 ucrt64 toolchain this
+#     workflow installs and the SDK config.h patch build/sea.ps1 applies (see
+#     its header). SEA_BUNDLED_PRISM=1 remains available to press without a
+#     compiler, using the runtime's prism 1.8.1 instead of ~> 1.9; tags always
+#     press the native build, because a release must not ship an older prism
+#     than the gem. The leg still blocks nothing (continue-on-error).
 #
 # UPX: attempted-but-not-shipped. tebako packages carry appended image slots
 # after the ELF container; UPX rewrites the ELF and shifts the slots, so the
@@ -72,7 +75,7 @@ on:
       tebako_version:
         description: "tebako release used for pressing (spike runs; tags use the pinned default)"
         required: false
-        default: "v2.8.68"
+        default: "v2.8.77"
       upx:
         description: "Attempt UPX compression on the linux-gnu binaries (falls back automatically)"
         required: false
@@ -89,7 +92,7 @@ concurrency:
 
 env:
   SEA_RUBY_VERSION: ${{ github.event.inputs.sea_ruby || '4.0.7' }}
-  TEBAKO_VERSION: ${{ github.event.inputs.tebako_version || 'v2.8.68' }}
+  TEBAKO_VERSION: ${{ github.event.inputs.tebako_version || 'v2.8.77' }}
 
 permissions:
   contents: write
@@ -183,15 +186,12 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  sea-macos:
-    name: SEA macos ${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { arch: arm64, os: macos-26 }
-          - { arch: x86_64, os: macos-15-intel }
+  # Two explicit jobs rather than one matrix job, because the x86_64 leg is
+  # tag-only and a job-level `if` cannot read `matrix` (the context is not
+  # available there, and a workflow that tries it fails to load).
+  sea-macos-arm64:
+    name: SEA macos arm64
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -203,18 +203,42 @@ jobs:
       - name: Upload the binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sea-macos-${{ matrix.arch }}
+          name: sea-macos-arm64
+          path: dist/*
+          if-no-files-found: error
+
+  sea-macos-x86_64:
+    name: SEA macos x86_64
+    # Tag-only: a tag must publish both macOS binaries, but a build-only dry
+    # run (pull request, dispatch) exercises the same press scripts on the
+    # arm64 leg above, and keeping the Intel runner off dry runs is half the
+    # macOS queue load.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the press toolchain
+        run: brew install cmake
+      - name: Press the executable
+        run: ./build/sea.sh
+      - name: Upload the binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sea-macos-x86_64
           path: dist/*
           if-no-files-found: error
 
   # Experimental and deliberately non-blocking (continue-on-error, absent from
-  # the release job's needs:). tebako v2.8.68 cannot compile prism's native
-  # extension on Windows; build/sea.ps1's header has the two failures. On pull
-  # requests and dispatches the leg presses with SEA_BUNDLED_PRISM=1 (no
-  # compiler, the runtime's prism 1.8.1) so the rest of the Windows path stays
-  # exercised. On a tag the switch is off, the press fails, and no .exe
-  # exists to publish: that, not only the release job's download pattern, is
-  # what keeps a prism-1.8.1 Windows binary out of a release.
+  # the release job's needs:). Every run presses the native prism ~> 1.9 build:
+  # the MSYS2 ucrt64 toolchain is installed below, and build/sea.ps1 patches
+  # the SDK config.h that tebako-runtime-ruby v0.2.38 broke for mingw builds
+  # (its header has the details). The .exe artifact therefore exists on every
+  # run again; publishing it is still a deliberate no (the release job's
+  # download pattern and asset count stay at six until that decision is made,
+  # and the spike's "verify on a real x64 Windows machine" recommendation
+  # stands: the VM numbers are x64-under-emulation).
   sea-windows:
     name: SEA windows-ucrt64 (experimental)
     runs-on: windows-latest
@@ -223,13 +247,22 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # No compiler is installed: with SEA_BUNDLED_PRISM=1 the press installs only
-      # pure-Ruby gems, and without it the native build fails whatever the toolchain.
+      # The native prism build needs the ucrt64 ABI gcc (the runtime is ucrt)
+      # and the MSYS make, which resolves the '/C/...' prerequisite paths mkmf
+      # writes; mingw32-make cannot. ucrt64\bin goes first on PATH so it wins
+      # over the runner image's legacy C:\mingw64 (msvcrt) gcc.
+      - name: Install the MSYS2 ucrt64 toolchain
+        shell: pwsh
+        run: |
+          choco install -y --no-progress msys2
+          C:\tools\msys64\usr\bin\bash.exe -lc "pacman -Sy --needed --noconfirm mingw-w64-ucrt-x86_64-gcc make"
       - name: Press the executable
         shell: pwsh
         env:
-          SEA_BUNDLED_PRISM: ${{ startsWith(github.ref, 'refs/tags/') && '0' || '1' }}
-        run: ./build/sea.ps1
+          SEA_BUNDLED_PRISM: "0"
+        run: |
+          $env:PATH = "C:\tools\msys64\ucrt64\bin;C:\tools\msys64\usr\bin;$env:PATH"
+          ./build/sea.ps1
       - name: Upload the binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -241,7 +274,7 @@ jobs:
     name: Publish the GitHub release
     # sea-windows is deliberately absent: it is experimental (see the job's
     # comment) and must never hold up or fail a release.
-    needs: [sea-linux-gnu, sea-linux-musl, sea-macos]
+    needs: [sea-linux-gnu, sea-linux-musl, sea-macos-arm64, sea-macos-x86_64]
     # A dispatch is a build-only dry run; only a tag publishes.
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04

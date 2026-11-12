@@ -7,25 +7,42 @@
 #
 # EXPERIMENTAL — the release workflow builds this leg but does not publish it.
 #
-# History, because it explains the switch below. With tebako v2.1.8 every press
-# failed on tamatebako/tebako#486 (a duplicate 'libwinpthread-1.dll' alias
-# between the runtime and payload images). With v2.8.68 that error is only a
-# warning, and the press instead fails while compiling prism's native
-# extension:
+# History, because it explains the requirements below. With tebako v2.1.8 every
+# press failed on tamatebako/tebako#486 (a duplicate 'libwinpthread-1.dll'
+# alias between the runtime and payload images). The fix chain for
+# tamatebako/tebako#753 (closed green at v2.8.44: a real ruby.exe spawn
+# vehicle, the alias-clean child mount, the Windows SDK provisioning) landed
+# all of that in the press driver, so with v2.8.77 the press gets as far as
+# compiling prism's native extension and needs two things from the machine:
 #
-#   - on GitHub's windows-latest the generated Makefile names an MSYS-style
-#     prerequisite, "No rule to make target '/C/Users/runneradmin/.tebako/
-#     deps/sdk/.../include/ruby.h'";
-#   - with MSYS2 ucrt64 or MinGW-Builds gcc on a Windows 11 VM, the SDK's
-#     ruby/win32.h and mingw's sys/time.h / winsock2.h disagree
-#     ("conflicting types for 'gettimeofday'" and 'shutdown').
+#   - an MSYS2 ucrt64 gcc FIRST on PATH (the runtime is ucrt; the legacy
+#     msvcrt MinGW-Builds gcc compiles against the wrong ABI), and an MSYS
+#     `make` (from msys2's own usr/bin) rather than mingw32-make, because the
+#     Makefile mkmf generates carries MSYS-style '/C/...' prerequisite paths
+#     that only an MSYS make resolves;
+#   - the SDK config.h patch below: tebako's runtime-SDK artifacts (v0.2.38,
+#     rolled into the registry on 2026-11-11/12) carry the build farm's
+#     configure results, which define HAVE_SYS_TIME_H and leave
+#     HAVE_SHUTDOWN undefined. RubyInstaller, which builds Ruby with mingw,
+#     does the opposite, and Ruby's own public headers require that: with
+#     HAVE_SYS_TIME_H set, ruby/missing.h includes mingw's sys/time.h and its
+#     gettimeofday declaration collides with ruby/win32.h's ("conflicting
+#     types"), and without HAVE_SHUTDOWN ruby/missing.h's own shutdown
+#     declaration collides with winsock2.h's. The patch rewrites those three
+#     lines to RubyInstaller's feature set after the press provisions the SDK
+#     and before the gems build. Remove it once tebako's SDK carries a
+#     mingw-compatible config.h (their nightly rails-windows leg pins
+#     tebako 2.8.44 with pre-regression SDK artifacts, so it stays green
+#     without this).
 #
-# Neither is resolved or reported upstream yet. SEA_BUNDLED_PRISM=1 avoids the
-# native build: it drops prism from the pressed Gemfile, so only pure-Ruby
-# gems are installed, no compiler is needed, and the executable uses the
-# runtime's default prism gem (1.8.1 in runtime 4.0.7) instead of ~> 1.9. The
-# smoke test then accepts that older prism and says so. Without the switch the
-# script still needs a ucrt64 toolchain on PATH and fails as described above.
+# v2.8.78 is deliberately not used: every binary in that release identifies
+# itself as 2.8.77, so the pinned-version check below rejects it.
+#
+# SEA_BUNDLED_PRISM=1 still avoids the native build entirely: it drops prism
+# from the pressed Gemfile, so only pure-Ruby gems are installed, no compiler
+# is needed, and the executable uses the runtime's default prism gem (1.8.1 in
+# runtime 4.0.7) instead of ~> 1.9. The smoke test then accepts that older
+# prism and says so.
 #
 #   ./build/sea.ps1                     # press with the pinned defaults
 #   ./build/sea.ps1 -RubyVersion 4.0.7
@@ -46,7 +63,7 @@ $ErrorActionPreference = "Stop"
 if (-not $RubyVersion) { $RubyVersion = $env:SEA_RUBY_VERSION }
 if (-not $RubyVersion) { $RubyVersion = "4.0.7" }
 if (-not $TebakoVersion) { $TebakoVersion = $env:TEBAKO_VERSION }
-if (-not $TebakoVersion) { $TebakoVersion = "v2.8.68" }
+if (-not $TebakoVersion) { $TebakoVersion = "v2.8.77" }
 # The value must carry the v: it names the release tag in the download URLs.
 $TebakoVersion = "v" + $TebakoVersion.TrimStart("v")
 
@@ -99,6 +116,74 @@ if (-not (Test-PinnedTebako)) {
 }
 
 # ---------------------------------------------------------------------------
+# 1b. Toolchain preflight for the native prism build (see the header). With
+#     SEA_BUNDLED_PRISM=1 no compiler is needed at all, so the checks are
+#     skipped and the SDK patch job is not started.
+# ---------------------------------------------------------------------------
+$BundledPrism = $env:SEA_BUNDLED_PRISM -eq "1"
+$SdkPatchJob = $null
+if (-not $BundledPrism) {
+    $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+    if (-not $gcc) {
+        throw "sea.ps1: no gcc on PATH. Install the MSYS2 ucrt64 toolchain (mingw-w64-ucrt-x86_64-gcc) and put its ucrt64\bin first on PATH."
+    }
+    if ($gcc.Source -notmatch "ucrt64") {
+        throw "sea.ps1: gcc resolved to $($gcc.Source), which is not the ucrt64 ABI the runtime is built for. Put the MSYS2 ucrt64\bin directory ahead of it."
+    }
+    $make = Get-Command make -ErrorAction SilentlyContinue
+    if (-not $make) {
+        throw "sea.ps1: no make on PATH. The MSYS make (msys2's usr\bin) is required: mingw32-make cannot resolve the '/C/...' prerequisite paths mkmf writes."
+    }
+    Write-Host "sea.ps1: gcc $($gcc.Source), make $($make.Source)"
+
+    # The SDK config.h patch (see the header). tebako press provisions the SDK
+    # and then builds the gems in one command, so the patch runs as a job that
+    # waits for the file, rewrites the three feature defines and exits. It is
+    # idempotent: a re-run on an already-patched SDK does nothing.
+    $sdkDir = Join-Path $env:USERPROFILE ".tebako\deps\sdk"
+    $rubyVer = $RubyVersion
+    $SdkPatchJob = Start-Job -Name seaSdkPatch -ScriptBlock {
+        param($sdkDir, $rubyVer)
+        # The press reads config.h when the gems build, seconds after
+        # provisioning writes it, so patch the moment the file appears and then
+        # keep verifying: if provisioning rewrites it once more, patch again.
+        # Writing goes through a temp file moved into place, so extconf never
+        # observes a half-written config.h.
+        $deadline = (Get-Date).AddMinutes(10)
+        $patched = $false
+        while ((Get-Date) -lt $deadline) {
+            $cfg = Get-ChildItem -Path (Join-Path $sdkDir "$rubyVer-*-windows-ucrt64\archhdr\ruby\config.h") `
+                -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cfg) {
+                $text = Get-Content $cfg.FullName -Raw
+                if ($text -match "(?m)^#define HAVE_SYS_TIME_H 1") {
+                    $text = $text -replace "(?m)^#define HAVE_SYS_TIME_H 1.*$",
+                        "// sea.ps1 SDK patch (tebako-runtime-ruby v0.2.38 regression): RubyInstaller's mingw feature set`r`n#define HAVE_SHUTDOWN 1"
+                    $tmp = "$($cfg.FullName).seapatch"
+                    Set-Content -Path $tmp -Value $text -NoNewline
+                    Move-Item -Path $tmp -Destination $cfg.FullName -Force
+                    $patched = $true
+                    Start-Sleep -Seconds 3
+                    continue
+                }
+                if ($patched -and $text -match "sea\.ps1 SDK patch") {
+                    return "patched and stable: $($cfg.FullName)"
+                }
+                if (-not $patched -and $text -match "sea\.ps1 SDK patch") {
+                    return "no patch needed (already patched): $($cfg.FullName)"
+                }
+                if (-not $patched -and $text -notmatch "HAVE_SYS_TIME_H" -and $text -match "HAVE_SHUTDOWN") {
+                    return "no patch needed (SDK fixed upstream): $($cfg.FullName)"
+                }
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        if ($patched) { return "patched but never observed stable: $($cfg.FullName)" }
+        "timeout: the SDK config.h never appeared"
+    } -ArgumentList $sdkDir, $rubyVer
+}
+
+# ---------------------------------------------------------------------------
 # 2. Build tree: a Gemfile root (see build/sea.sh for why the gemspec layout is
 #    not pressable). press installs the gems inside the pinned runtime, so no
 #    Ruby is needed on this machine either.
@@ -124,7 +209,6 @@ gem "prism", "~> 1.9"
     # SEA_BUNDLED_PRISM=1 drops the prism line so that no native extension is
     # compiled at press time and the runtime's default prism gem is used
     # instead (see the header). The release workflow never sets it on a tag.
-    $BundledPrism = $env:SEA_BUNDLED_PRISM -eq "1"
     if ($BundledPrism) {
         (Get-Content (Join-Path $BuildRoot "Gemfile")) -notmatch '^gem "prism"' |
             Set-Content (Join-Path $BuildRoot "Gemfile")
@@ -144,6 +228,14 @@ gem "prism", "~> 1.9"
     $OutStem = Join-Path (Split-Path -Parent $Out) `
         ([System.IO.Path]::GetFileNameWithoutExtension($Out))
     tebako press -r $BuildRoot -e sea/entry.rb -o $OutStem -R $RubyVersion -m self-contained
+    # The SDK patch job's verdict, before anything else can throw. It reports
+    # whether the patch landed (or was unnecessary) while the gems built.
+    if ($SdkPatchJob) {
+        Wait-Job -Job $SdkPatchJob -Timeout 30 | Out-Null
+        Write-Host "sea.ps1: SDK patch job: $(Receive-Job -Job $SdkPatchJob)"
+        Remove-Job -Job $SdkPatchJob -Force -ErrorAction SilentlyContinue
+        $SdkPatchJob = $null
+    }
     # A native command's non-zero exit does not trip $ErrorActionPreference, so
     # without this check a failed press falls through into the smoke tests and
     # reports a missing executable instead of the press error that caused it.
@@ -227,5 +319,9 @@ gem "prism", "~> 1.9"
     "$hash  $(Split-Path -Leaf $Out)" | Set-Content "$Out.sha256"
     Write-Host ("sea.ps1: built {0} ({1:N1} MB)" -f (Split-Path -Leaf $Out), ((Get-Item $Out).Length / 1MB))
 } finally {
+    if ($SdkPatchJob) {
+        Stop-Job -Job $SdkPatchJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $SdkPatchJob -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item -Recurse -Force $BuildRoot -ErrorAction SilentlyContinue
 }
