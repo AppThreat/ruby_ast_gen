@@ -1,0 +1,29 @@
+.github/workflows/release.yaml
+  s_cd7a37553d7bf5::t_7a0bb8b77f79db 213-220,229-237,241-244
+  s_cd7a37553d7bf5::t_1abfa61e77012e 29-36
+README.md
+  s_cd7a37553d7bf5::t_21cceaa0e1041f 16-19
+build/sea.ps1
+  s_cd7a37553d7bf5::t_ca881259e8bbd5 215-222
+  s_cd7a37553d7bf5::t_9c0872c90d2db9 10-16,18-36,38-45
+  s_cd7a37553d7bf5::t_37d8df2a8e2ec8 306-309
+  s_cd7a37553d7bf5::t_f10f0f72afd3e8 118-169
+docs/sea-spike.md
+  s_cd7a37553d7bf5::t_dd52596cf6794a 303-366
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "026400dc4a40a653fbd193a251df31f2cb9f4b7d",
+  "prompts": {},
+  "sessions": {
+    "s_cd7a37553d7bf5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "sess_b00a8b8c-312c-48ea-9c84-25b5cb7fc1cb",
+        "model": "GLM-5.3"
+      },
+      "human_author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
