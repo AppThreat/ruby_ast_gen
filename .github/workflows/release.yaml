@@ -186,21 +186,12 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  sea-macos:
-    name: SEA macos ${{ matrix.arch }}
-    # The x86_64 leg is tag-only: a tag must publish both macOS binaries, but a
-    # build-only dry run (pull request, dispatch) exercises the same press
-    # scripts on the arm64 leg, and keeping the Intel runner off dry runs is
-    # half the macOS queue load. tag_only entries never block the release job:
-    # on a tag the condition is true and both legs run.
-    if: ${{ !matrix.tag_only || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { arch: arm64, os: macos-26 }
-          - { arch: x86_64, os: macos-15-intel, tag_only: true }
+  # Two explicit jobs rather than one matrix job, because the x86_64 leg is
+  # tag-only and a job-level `if` cannot read `matrix` (the context is not
+  # available there, and a workflow that tries it fails to load).
+  sea-macos-arm64:
+    name: SEA macos arm64
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -212,7 +203,30 @@ jobs:
       - name: Upload the binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sea-macos-${{ matrix.arch }}
+          name: sea-macos-arm64
+          path: dist/*
+          if-no-files-found: error
+
+  sea-macos-x86_64:
+    name: SEA macos x86_64
+    # Tag-only: a tag must publish both macOS binaries, but a build-only dry
+    # run (pull request, dispatch) exercises the same press scripts on the
+    # arm64 leg above, and keeping the Intel runner off dry runs is half the
+    # macOS queue load.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the press toolchain
+        run: brew install cmake
+      - name: Press the executable
+        run: ./build/sea.sh
+      - name: Upload the binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sea-macos-x86_64
           path: dist/*
           if-no-files-found: error
 
@@ -260,7 +274,7 @@ jobs:
     name: Publish the GitHub release
     # sea-windows is deliberately absent: it is experimental (see the job's
     # comment) and must never hold up or fail a release.
-    needs: [sea-linux-gnu, sea-linux-musl, sea-macos]
+    needs: [sea-linux-gnu, sea-linux-musl, sea-macos-arm64, sea-macos-x86_64]
     # A dispatch is a build-only dry run; only a tag publishes.
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
