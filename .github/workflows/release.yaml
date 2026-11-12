@@ -72,7 +72,7 @@ on:
       tebako_version:
         description: "tebako release used for pressing (spike runs; tags use the pinned default)"
         required: false
-        default: "v2.8.68"
+        default: "v2.8.78"
       upx:
         description: "Attempt UPX compression on the linux-gnu binaries (falls back automatically)"
         required: false
@@ -89,7 +89,7 @@ concurrency:
 
 env:
   SEA_RUBY_VERSION: ${{ github.event.inputs.sea_ruby || '4.0.7' }}
-  TEBAKO_VERSION: ${{ github.event.inputs.tebako_version || 'v2.8.68' }}
+  TEBAKO_VERSION: ${{ github.event.inputs.tebako_version || 'v2.8.78' }}
 
 permissions:
   contents: write

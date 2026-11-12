@@ -20,7 +20,7 @@
 #   SEA_RUBY_VERSION  CRuby runtime pressed into the binary (default 4.0.7; must
 #                     exist in `tebako info runtimes --remote` for the platform,
 #                     with its .asc signature: 4.0.6 has none for macos-arm64)
-#   TEBAKO_VERSION    pinned tebako release used for pressing (default v2.8.68).
+#   TEBAKO_VERSION    pinned tebako release used for pressing (default v2.8.78).
 #                     A tebako already on PATH is used only if it is this
 #                     version; otherwise the pinned release is installed into
 #                     ~/.local/bin, replacing whatever copy is there.
@@ -40,7 +40,7 @@ REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 SEA_RUBY_VERSION=${SEA_RUBY_VERSION:-4.0.7}
 # The pinned tebako release used for pressing. The value must carry the v: the
 # tag names the release download URLs below.
-TEBAKO_VERSION=${TEBAKO_VERSION:-v2.8.68}
+TEBAKO_VERSION=${TEBAKO_VERSION:-v2.8.78}
 TEBAKO_VERSION="v${TEBAKO_VERSION#v}"
 SEA_UPX=${SEA_UPX:-0}
 SEA_DIST=${SEA_DIST:-$REPO_ROOT/dist}
