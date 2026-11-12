@@ -1,0 +1,20 @@
+build/sea.ps1
+  s_cd7a37553d7bf5::t_471d6b0158e14f 147-154,162-174,179,181
+  s_cd7a37553d7bf5::t_5cfc556d376696 175-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b660bb2b8d82870933343ab1d0c2dec0dcbbcc5a",
+  "prompts": {},
+  "sessions": {
+    "s_cd7a37553d7bf5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "sess_b00a8b8c-312c-48ea-9c84-25b5cb7fc1cb",
+        "model": "GLM-5.3"
+      },
+      "human_author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
