@@ -13,8 +13,10 @@ Each [release](https://github.com/AppThreat/ruby_ast_gen/releases) attaches a
 single self-contained executable per platform:
 `ruby_ast_gen-<version>-<platform>`, where `<platform>` is one of
 `linux-gnu-x86_64`, `linux-gnu-arm64`, `linux-musl-x86_64`, `linux-musl-arm64`,
-`macos-arm64` or `macos-x86_64`. Windows is not available yet: tebako cannot
-compile prism's native extension during a Windows press.
+`macos-arm64` or `macos-x86_64`. A Windows build (x64) now exists with the full
+prism 1.9 backend, pressed with tebako v2.8.77 plus the MSYS2 ucrt64 toolchain
+and a small SDK patch (see `docs/sea-spike.md`), but it is not attached to
+releases yet: it still waits on verification on a real x64 Windows machine.
 
 The gnu binaries need glibc 2.31 or newer (Ubuntu 20.04+, Debian 11+, RHEL 9+),
 and the macOS binaries need macOS 14 or newer.

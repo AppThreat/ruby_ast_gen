@@ -300,3 +300,67 @@ A review of the first version found these, all addressed on this branch:
   claimed RHEL without a glibc floor.
 - **Container images** are now pinned by digest, like the actions.
 - **Windows path fix** has a test.
+
+## Retest on 2026-11-12: the native press works again
+
+Retest of the #17 blocker on the same Parallels Windows 11 ARM64 VM, from branch
+`spike/windows-sea-retest`. Environment: tebako v2.8.77 (v2.8.78's binaries all
+identify as 2.8.77, so the pinned-version check rejects that release), MSYS2 ucrt64
+gcc 16.2 with mingw-w64 headers 14.0.0.r598, the MSYS make 4.4.1 from msys2's
+usr/bin, and Git's sh for the SDK configure replay.
+
+What changed since the spike:
+
+1. The tamatebako/tebako#753 fix chain is inside the press driver. The press now
+   provisions a runtime SDK ("ruby headers for native extension builds"), builds a
+   deploy driver with a real re-entry `ruby.exe` (the `/local/stub.rb` spawn), and
+   gets all the way to compiling prism. The v2.1.8 and v2.8.68 failures (#486, the
+   missing spawn vehicle) are gone.
+2. Two requirements on the pressing machine, both now checked by `build/sea.ps1`:
+   the ucrt64 gcc must resolve first on PATH (the MSVCRT MinGW-Builds gcc that
+   shadows it on this VM compiles against the wrong ABI), and `make` must be the
+   MSYS make, because the Makefile mkmf generates still carries MSYS-style
+   `/C/...` prerequisite paths ("No rule to make target '/C/.../include/ruby.h'")
+   that mingw32-make cannot resolve but MSYS make can.
+3. A regression in tebako's runtime-SDK artifacts, rolled into the registry on
+   2026-11-11/12 (SDK v0.2.38): the freshly provisioned
+   `archhdr/ruby/config.h` defines `HAVE_SYS_TIME_H 1` and leaves `HAVE_SHUTDOWN`
+   undefined, which is the build farm's configure result, not a mingw one. With it,
+   `ruby/missing.h` includes mingw's `sys/time.h` and its `gettimeofday`
+   declaration collides with `ruby/win32.h`'s, and `ruby/missing.h`'s own
+   `shutdown` declaration collides with `winsock2.h`'s: the two "conflicting
+   types" errors the spike saw, now reproduced with a single conftest against the
+   SDK headers. RubyInstaller, which builds Ruby with mingw, does the opposite
+   (`HAVE_GETTIMEOFDAY 1`, `HAVE_SHUTDOWN 1`, no `HAVE_SYS_TIME_H`), and the same
+   conftest against its 3.4.10 headers compiles clean. tebako's own nightly
+   rails-windows leg stays green because it pins tebako 2.8.44 with SDK artifacts
+   fetched before the roll. `build/sea.ps1` now patches those three lines in the
+   provisioned config.h to RubyInstaller's feature set while the press runs; the
+   patch is removed the moment tebako's SDK carries a mingw-compatible config.h
+   again.
+
+Results with those three in place, runtime 3.4.10 and the Gemfile's `prism ~> 1.9`:
+
+- The press completes: `ruby_ast_gen-2.1.0-windows-ucrt64.exe`, 83.4 MB (the
+  bundled-prism 1.8.1 build of 2026-11-04 was 85.0 MB), SHA-256
+  `c5269b232490bf33359c3ebd613accf4b058fc0e2a243e0d2ad67932e9168b93`.
+- `--version` prints `2.1.0`. `--parser-info` reports runtime 3.4.10, platform
+  x64-mingw-ucrt, `Parser backend: Prism::Translation::Parser41`,
+  `Prism gem: 1.9.0`: the native prism 1.9.0 extension, not the runtime's default
+  1.8.1 and not the parser-gem fallback.
+- Parsing `lib/ruby_ast_gen/version.rb` emits AST JSON with
+  `"parser_backend":"Prism::Translation::Parser41"`.
+- Wall time of the press on the emulated-x64 VM: about 8 minutes, of which the SDK
+  provisioning is roughly half.
+- The runtime 4.0.7 press (the release default configuration) completes the same
+  way: `sea.ps1`'s own smoke suite passes (pristine and hostile legs, prism >= 1.9
+  enforced), `--parser-info` reports `Prism::Translation::Parser41` with
+  `Prism gem: 1.9.0` on Ruby 4.0.7, 83.1 MB, SHA-256
+  `80316db52c5985879163c1f715909b3aed8a0adc0d86996ba19a80dbfda1c86d`.
+
+Still open, upstream: the SDK config.h regression (the patch in sea.ps1 works
+around it and can be reverted once tebako-runtime-ruby serves a mingw-compatible
+SDK), and the `/C/...` Makefile paths, which the MSYS make tolerates but tebako
+should emit in mixed `C:/...` form. Publishing the Windows executable also still
+waits on a real x64 Windows machine (the #17 recommendation), which the VM cannot
+provide.
