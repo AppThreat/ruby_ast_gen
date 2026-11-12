@@ -43,12 +43,16 @@ jobs:
           - { os: ubuntu-24.04, ruby: "truffleruby-34.0" }
 
           # OS coverage on the current stable releases. Windows is the interesting one: path
-          # separators and dotfile globbing are where directory discovery differs.
+          # separators and dotfile globbing are where directory discovery differs. macOS gets a
+          # single leg on the current stable CRuby: its path handling is POSIX like Linux's, so
+          # what it actually adds is the OS's own behaviour (default encoding, glob quirks), and
+          # the release workflow's SEA legs already build and smoke-test the macOS binaries on
+          # every press. More legs here only queue more jobs on the small macOS runner pool,
+          # which is where PRs starve and get cancelled (three macOS test legs plus two release
+          # legs once queued five macOS jobs off one push).
           - { os: windows-latest, ruby: "3.4.10" }
           - { os: windows-latest, ruby: "4.0.6" }
-          - { os: macos-26, ruby: "3.4.10" }
           - { os: macos-26, ruby: "4.0.6" }
-          - { os: macos-26, ruby: "jruby-10.1" }
           - { os: ubuntu-24.04-arm, ruby: "3.4.10" }
           - { os: ubuntu-24.04-arm, ruby: "4.0.6" }
           # An older distribution, kept on the oldest supported runtime, so the pair that is most

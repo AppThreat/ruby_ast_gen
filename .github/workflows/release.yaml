@@ -23,9 +23,10 @@
 #     musl system; the gnu binaries run on glibc distros (verified on
 #     Ubuntu 20.04 / glibc 2.31).
 #   - macos: arm64 on the current runner, x86_64 on macos-15-intel (the last
-#     Intel image GitHub ships, available until ~Aug 2027). build/sea.sh sets
-#     MACOSX_DEPLOYMENT_TARGET=14.0 so prism's extension does not inherit the
-#     runner's macOS version as its minimum.
+#     Intel image GitHub ships, available until ~Aug 2027; that leg runs only
+#     on tags, so build-only dry runs do not queue the scarce Intel runner).
+#     build/sea.sh sets MACOSX_DEPLOYMENT_TARGET=14.0 so prism's extension
+#     does not inherit the runner's macOS version as its minimum.
 #   - windows: ucrt64 (x64), EXPERIMENTAL and unpublished. With tebako v2.8.77
 #     the press compiles prism's native extension again (the tamatebako/tebako
 #     #753 fix chain is in the driver), given the MSYS2 ucrt64 toolchain this
@@ -187,13 +188,19 @@ jobs:
 
   sea-macos:
     name: SEA macos ${{ matrix.arch }}
+    # The x86_64 leg is tag-only: a tag must publish both macOS binaries, but a
+    # build-only dry run (pull request, dispatch) exercises the same press
+    # scripts on the arm64 leg, and keeping the Intel runner off dry runs is
+    # half the macOS queue load. tag_only entries never block the release job:
+    # on a tag the condition is true and both legs run.
+    if: ${{ !matrix.tag_only || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - { arch: arm64, os: macos-26 }
-          - { arch: x86_64, os: macos-15-intel }
+          - { arch: x86_64, os: macos-15-intel, tag_only: true }
     timeout-minutes: 45
     steps:
       - name: Checkout repository
