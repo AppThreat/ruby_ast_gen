@@ -5,7 +5,7 @@ source "https://rubygems.org"
 gemspec
 
 gem "ostruct", "~> 0.6.3"
-gem "parser", "~> 3.3.12.0"
+gem "parser", "~> 3.3.13.0"
 gem "prism", "~> 1.9"
 
 # Development only. The group is load-bearing beyond bundler: the gems outside
