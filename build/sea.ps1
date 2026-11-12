@@ -144,25 +144,41 @@ if (-not $BundledPrism) {
     $rubyVer = $RubyVersion
     $SdkPatchJob = Start-Job -Name seaSdkPatch -ScriptBlock {
         param($sdkDir, $rubyVer)
-        for ($i = 0; $i -lt 900; $i++) {
+        # The press reads config.h when the gems build, seconds after
+        # provisioning writes it, so patch the moment the file appears and then
+        # keep verifying: if provisioning rewrites it once more, patch again.
+        # Writing goes through a temp file moved into place, so extconf never
+        # observes a half-written config.h.
+        $deadline = (Get-Date).AddMinutes(10)
+        $patched = $false
+        while ((Get-Date) -lt $deadline) {
             $cfg = Get-ChildItem -Path (Join-Path $sdkDir "$rubyVer-*-windows-ucrt64\archhdr\ruby\config.h") `
                 -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($cfg) {
-                # Let provisioning finish writing before rewriting it.
-                Start-Sleep -Seconds 20
                 $text = Get-Content $cfg.FullName -Raw
                 if ($text -match "(?m)^#define HAVE_SYS_TIME_H 1") {
                     $text = $text -replace "(?m)^#define HAVE_SYS_TIME_H 1.*$",
                         "// sea.ps1 SDK patch (tebako-runtime-ruby v0.2.38 regression): RubyInstaller's mingw feature set`r`n#define HAVE_SHUTDOWN 1"
-                    Set-Content -Path $cfg.FullName -Value $text -NoNewline
-                    "patched $($cfg.FullName)"
-                } else {
-                    "no patch needed (already patched or SDK fixed upstream): $($cfg.FullName)"
+                    $tmp = "$($cfg.FullName).seapatch"
+                    Set-Content -Path $tmp -Value $text -NoNewline
+                    Move-Item -Path $tmp -Destination $cfg.FullName -Force
+                    $patched = $true
+                    Start-Sleep -Seconds 3
+                    continue
                 }
-                return
+                if ($patched -and $text -match "sea\.ps1 SDK patch") {
+                    return "patched and stable: $($cfg.FullName)"
+                }
+                if (-not $patched -and $text -match "sea\.ps1 SDK patch") {
+                    return "no patch needed (already patched): $($cfg.FullName)"
+                }
+                if (-not $patched -and $text -notmatch "HAVE_SYS_TIME_H" -and $text -match "HAVE_SHUTDOWN") {
+                    return "no patch needed (SDK fixed upstream): $($cfg.FullName)"
+                }
             }
-            Start-Sleep -Seconds 1
+            Start-Sleep -Milliseconds 500
         }
+        if ($patched) { return "patched but never observed stable: $($cfg.FullName)" }
         "timeout: the SDK config.h never appeared"
     } -ArgumentList $sdkDir, $rubyVer
 }
