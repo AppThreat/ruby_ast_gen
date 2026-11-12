@@ -1,0 +1,24 @@
+build/sea.sh
+  s_cd7a37553d7bf5::t_127a0eb0f284bc 43
+  s_cd7a37553d7bf5::t_a83c02232763b1 23
+.github/workflows/release.yaml
+  s_cd7a37553d7bf5::t_3e53e3f90acfe4 75,92
+build/sea.ps1
+  s_cd7a37553d7bf5::t_1e70cfc54fec30 49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cd919ba29ebcb7389f0acf40592cf8b414c2f8b9",
+  "prompts": {},
+  "sessions": {
+    "s_cd7a37553d7bf5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "sess_b00a8b8c-312c-48ea-9c84-25b5cb7fc1cb",
+        "model": "GLM-5.3"
+      },
+      "human_author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
