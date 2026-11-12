@@ -1,0 +1,19 @@
+docs/sea-spike.md
+  s_cd7a37553d7bf5::t_6e47e7623968e2 361-411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "52bb22823bce77ceb3d0356849380d4591ab1231",
+  "prompts": {},
+  "sessions": {
+    "s_cd7a37553d7bf5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "sess_b00a8b8c-312c-48ea-9c84-25b5cb7fc1cb",
+        "model": "GLM-5.3"
+      },
+      "human_author": "Team AppThreat <cloud@appthreat.com>"
+    }
+  }
+}
