@@ -46,7 +46,7 @@ $ErrorActionPreference = "Stop"
 if (-not $RubyVersion) { $RubyVersion = $env:SEA_RUBY_VERSION }
 if (-not $RubyVersion) { $RubyVersion = "4.0.7" }
 if (-not $TebakoVersion) { $TebakoVersion = $env:TEBAKO_VERSION }
-if (-not $TebakoVersion) { $TebakoVersion = "v2.8.78" }
+if (-not $TebakoVersion) { $TebakoVersion = "v2.8.77" }
 # The value must carry the v: it names the release tag in the download URLs.
 $TebakoVersion = "v" + $TebakoVersion.TrimStart("v")
 
