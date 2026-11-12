@@ -203,7 +203,7 @@ try {
 source "https://rubygems.org"
 
 gem "ostruct", "~> 0.6.3"
-gem "parser", "~> 3.3.12.0"
+gem "parser", "~> 3.3.13.0"
 gem "prism", "~> 1.9"
 "@ | Set-Content (Join-Path $BuildRoot "Gemfile")
     # SEA_BUNDLED_PRISM=1 drops the prism line so that no native extension is

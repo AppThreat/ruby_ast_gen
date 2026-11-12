@@ -52,7 +52,7 @@ RSpec.describe "the SEA build Gemfile" do
     # A floor under the set comparison above: it would still pass if both sides
     # lost the same gem, and a binary without these two cannot parse anything.
     expect(sea_sh_gem_lines).to include(
-      %q{gem "parser", "~> 3.3.12.0"},
+      %q{gem "parser", "~> 3.3.13.0"},
       %q{gem "prism", "~> 1.9"}
     )
   end
